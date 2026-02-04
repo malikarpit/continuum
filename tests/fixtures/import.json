@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "exportedAt": "2026-02-03T00:00:00.000Z",
+  "data": {
+    "days": [],
+    "tasks": [],
+    "trainingSessions": [],
+    "meals": [],
+    "foodItems": [],
+    "templates": [],
+    "settings": [
+      {
+        "key": "appSettings",
+        "value": {
+          "proteinTarget": 200,
+          "calorieTarget": 2500,
+          "dayBoundaryHour": 4,
+          "primaryEquipment": "home",
+          "notificationsEnabled": false,
+          "gymSchedule": [1, 2, 3, 4, 5, 6],
+          "theme": "dark"
+        }
+      }
+    ],
+    "backups": [],
+    "phases": []
+  }
+}
