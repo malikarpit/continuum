@@ -30,7 +30,8 @@
   --color-accent-hover: #0d9488;
   --color-accent-light: rgba(20, 184, 166, 0.1);
   --color-accent-glow: rgba(20, 184, 166, 0.3);
-  --color-accent-rgb: 20, 184, 166; /* For rgba() usage */
+  --color-accent-rgb: 20, 184, 166;
+  /* For rgba() usage */
 
   /* Colors - Success/CTA */
   --color-success: #22c55e;
@@ -630,15 +631,14 @@ svg {
   background: rgba(13, 19, 33, 0.95);
   backdrop-filter: blur(10px);
   border-top: 1px solid var(--color-border);
-  padding: var(--spacing-2) var(--spacing-4);
-  padding-bottom: calc(var(--spacing-2) + env(safe-area-inset-bottom));
+  padding: var(--spacing-1) 0;
+  padding-bottom: calc(var(--spacing-1) + env(safe-area-inset-bottom));
   z-index: var(--z-dropdown);
 }
 
 @media (max-width: 768px) {
   .bottom-nav {
-    display: flex;
-    justify-content: space-around;
+    display: block;
   }
 
   .nav-links {
@@ -646,15 +646,29 @@ svg {
   }
 }
 
+.bottom-nav-scroll {
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 var(--spacing-2);
+}
+
+.bottom-nav-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 .bottom-nav-item {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--spacing-1);
-  padding: var(--spacing-2);
+  gap: 2px;
+  padding: var(--spacing-1) var(--spacing-2);
   color: var(--color-text-muted);
-  font-size: var(--font-size-xs);
+  font-size: 10px;
   transition: color var(--transition-fast);
+  min-width: 56px;
+  flex-shrink: 0;
 }
 
 .bottom-nav-item.active {
@@ -662,8 +676,8 @@ svg {
 }
 
 .bottom-nav-item svg {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
 }
 
 /* ===========================
