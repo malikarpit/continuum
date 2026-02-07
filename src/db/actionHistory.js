@@ -155,7 +155,7 @@ export function recordAction(type, description, previousState = null, metadata =
     }
 
     saveHistory();
-    console.log('[ActionHistory] Recorded:', type, description, metadata);
+
     return action;
 }
 
@@ -234,30 +234,28 @@ export function formatActionTime(timestamp) {
 export const UNDO_HANDLERS = {
     [ACTION_TYPES.TASK_COMPLETED]: async (action) => {
         // Restore task to pending status
-        console.log('[Undo] Restoring task to pending:', action.metadata);
+
         const db = await getDB();
         const task = await db.get(STORES.TASKS, action.metadata.taskId);
-        console.log('[Undo] Found task:', task);
+
         if (task && action.previousState) {
             task.status = action.previousState.status || 'pending';
             task.completedAt = null;
             await db.put(STORES.TASKS, task);
-            console.log('[Undo] Task restored to:', task.status);
             return true;
         }
-        console.log('[Undo] Task not found or no previous state');
+
         return false;
     },
 
     [ACTION_TYPES.TASK_SKIPPED]: async (action) => {
-        console.log('[Undo] Restoring skipped task:', action.metadata);
+
         const db = await getDB();
         const task = await db.get(STORES.TASKS, action.metadata.taskId);
         if (task && action.previousState) {
             task.status = action.previousState.status || 'pending';
             task.skipReason = null;
             await db.put(STORES.TASKS, task);
-            console.log('[Undo] Task skip undone');
             return true;
         }
         return false;
@@ -265,11 +263,9 @@ export const UNDO_HANDLERS = {
 
     [ACTION_TYPES.TASK_ADDED]: async (action) => {
         // Delete the added task
-        console.log('[Undo] Deleting added task:', action.metadata);
         const db = await getDB();
         if (action.metadata.taskId) {
             await db.delete(STORES.TASKS, action.metadata.taskId);
-            console.log('[Undo] Task deleted');
             return true;
         }
         return false;
@@ -326,13 +322,12 @@ export const UNDO_HANDLERS = {
     },
 
     [ACTION_TYPES.REST_DAY_SET]: async (action) => {
-        console.log('[Undo] Restoring rest day to pending:', action.metadata);
+
         const db = await getDB();
         const session = await db.get(STORES.TRAINING_SESSIONS, action.metadata.date);
         if (session && action.previousState) {
             session.status = action.previousState.status || 'pending';
             await db.put(STORES.TRAINING_SESSIONS, session);
-            console.log('[Undo] Rest day undone, status restored to:', session.status);
             return true;
         }
         return false;
@@ -340,53 +335,49 @@ export const UNDO_HANDLERS = {
 
     // Template undo handlers
     [ACTION_TYPES.TEMPLATE_CREATED]: async (action) => {
-        console.log('[Undo] Deleting created template:', action.metadata);
+
         const db = await getDB();
         if (action.metadata.templateId) {
             await db.delete(STORES.TEMPLATES, action.metadata.templateId);
-            console.log('[Undo] Template deleted');
             return true;
         }
         return false;
     },
 
     [ACTION_TYPES.TEMPLATE_DELETED]: async (action) => {
-        console.log('[Undo] Restoring deleted template:', action.metadata);
+
         const db = await getDB();
         if (action.previousState?.template) {
             await db.put(STORES.TEMPLATES, action.previousState.template);
-            console.log('[Undo] Template restored');
             return true;
         }
         return false;
     },
 
     [ACTION_TYPES.TEMPLATE_SAVED]: async (action) => {
-        console.log('[Undo] Restoring template to previous state:', action.metadata);
+
         const db = await getDB();
         if (action.previousState?.template) {
             await db.put(STORES.TEMPLATES, action.previousState.template);
-            console.log('[Undo] Template changes reverted');
             return true;
         }
         return false;
     },
 
     [ACTION_TYPES.TEMPLATE_BLOCK_ADDED]: async (action) => {
-        console.log('[Undo] Removing added block:', action.metadata);
+
         const db = await getDB();
         const template = await db.get(STORES.TEMPLATES, action.metadata.templateId);
         if (template && action.metadata.blockId) {
             template.timeBlocks = template.timeBlocks.filter(b => b.id !== action.metadata.blockId);
             await db.put(STORES.TEMPLATES, template);
-            console.log('[Undo] Block removed');
             return true;
         }
         return false;
     },
 
     [ACTION_TYPES.TEMPLATE_BLOCK_DELETED]: async (action) => {
-        console.log('[Undo] Restoring deleted block:', action.metadata);
+
         const db = await getDB();
         const template = await db.get(STORES.TEMPLATES, action.metadata.templateId);
         if (template && action.previousState?.block) {
@@ -395,14 +386,13 @@ export const UNDO_HANDLERS = {
             const insertIndex = action.previousState.blockIndex ?? template.timeBlocks.length;
             template.timeBlocks.splice(insertIndex, 0, action.previousState.block);
             await db.put(STORES.TEMPLATES, template);
-            console.log('[Undo] Block restored');
             return true;
         }
         return false;
     },
 
     [ACTION_TYPES.TEMPLATE_BLOCK_MODIFIED]: async (action) => {
-        console.log('[Undo] Reverting block modification:', action.metadata);
+
         const db = await getDB();
         const template = await db.get(STORES.TEMPLATES, action.metadata.templateId);
         if (template && action.previousState?.block) {
@@ -410,7 +400,6 @@ export const UNDO_HANDLERS = {
             if (blockIndex !== -1) {
                 template.timeBlocks[blockIndex] = action.previousState.block;
                 await db.put(STORES.TEMPLATES, template);
-                console.log('[Undo] Block reverted');
                 return true;
             }
         }
@@ -418,7 +407,7 @@ export const UNDO_HANDLERS = {
     },
 
     [ACTION_TYPES.TEMPLATE_TASK_ADDED]: async (action) => {
-        console.log('[Undo] Removing added task:', action.metadata);
+
         const db = await getDB();
         const template = await db.get(STORES.TEMPLATES, action.metadata.templateId);
         if (template) {
@@ -428,7 +417,6 @@ export const UNDO_HANDLERS = {
                 const taskIndex = action.metadata.taskIndex ?? (block.defaultTasks.length - 1);
                 block.defaultTasks.splice(taskIndex, 1);
                 await db.put(STORES.TEMPLATES, template);
-                console.log('[Undo] Task removed');
                 return true;
             }
         }
@@ -436,7 +424,7 @@ export const UNDO_HANDLERS = {
     },
 
     [ACTION_TYPES.TEMPLATE_TASK_DELETED]: async (action) => {
-        console.log('[Undo] Restoring deleted task:', action.metadata);
+
         const db = await getDB();
         const template = await db.get(STORES.TEMPLATES, action.metadata.templateId);
         if (template && action.previousState?.task) {
@@ -446,7 +434,6 @@ export const UNDO_HANDLERS = {
                 const insertIndex = action.previousState.taskIndex ?? block.defaultTasks.length;
                 block.defaultTasks.splice(insertIndex, 0, action.previousState.task);
                 await db.put(STORES.TEMPLATES, template);
-                console.log('[Undo] Task restored');
                 return true;
             }
         }
@@ -493,7 +480,7 @@ export function canUndo(action) {
 export async function undoAction(actionId) {
     ensureInitialized();
 
-    console.log('[Undo] Looking for action:', actionId);
+
     const action = getAction(actionId);
 
     if (!action) {
@@ -501,7 +488,7 @@ export async function undoAction(actionId) {
         throw new Error('Action not found');
     }
 
-    console.log('[Undo] Found action:', action);
+
 
     if (!canUndo(action)) {
         console.error('[Undo] Action cannot be undone:', action.type);
@@ -515,13 +502,11 @@ export async function undoAction(actionId) {
     }
 
     try {
-        console.log('[Undo] Executing handler for:', action.type);
+
         const success = await handler(action);
-        console.log('[Undo] Handler result:', success);
 
         if (success) {
             removeAction(actionId);
-            console.log('[Undo] Action removed from history');
             return true;
         }
 

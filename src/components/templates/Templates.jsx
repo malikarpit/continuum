@@ -17,6 +17,8 @@ import {
     DAYS_OF_WEEK,
 } from '../../db/templateStore';
 import { recordAction, ACTION_TYPES } from '../../db/actionHistory';
+import { createTask, saveTask, getTasksByDate } from '../../db/taskStore';
+import { getDay, getDateString } from '../../db/dayStore';
 
 // Common emoji list for block icons
 const BLOCK_EMOJIS = [
@@ -28,7 +30,7 @@ const BLOCK_EMOJIS = [
 ];
 
 export default function Templates() {
-    const { showToast, refreshActionHistory } = useAppStore();
+    const { showToast, refreshActionHistory, refreshDay } = useAppStore();
 
     const [templates, setTemplates] = useState([]);
     const [selectedTemplate, setSelectedTemplate] = useState(null);
@@ -72,6 +74,46 @@ export default function Templates() {
             const originalTemplate = await getTemplate(selectedTemplate.id);
 
             await saveTemplate(selectedTemplate);
+
+            // --- Sync newly added tasks to today if this template is active ---
+            const todayStr = getDateString();
+            const today = await getDay(todayStr);
+
+            // Check if this template is applied to today
+            if (today?.templateId === selectedTemplate.id && today?.templateApplied) {
+                // Get existing tasks for today
+                const existingTasks = await getTasksByDate(todayStr);
+                const existingTaskTitles = new Set(existingTasks.map(t => t.title));
+
+                // Find newly added tasks that don't exist yet
+                const tasksToCreate = [];
+                for (const block of selectedTemplate.timeBlocks || []) {
+                    for (const taskDef of block.defaultTasks || []) {
+                        // Only create if task with same title doesn't exist
+                        if (!existingTaskTitles.has(taskDef.title)) {
+                            tasksToCreate.push({
+                                ...taskDef,
+                                date: todayStr,
+                                blockId: block.id,
+                                templateId: selectedTemplate.id,
+                            });
+                        }
+                    }
+                }
+
+                // Create new tasks
+                for (const taskData of tasksToCreate) {
+                    const task = createTask(taskData);
+                    await saveTask(task);
+                }
+
+                // Refresh the app state to show new tasks
+                if (tasksToCreate.length > 0) {
+                    refreshDay();
+                    showToast(`Added ${tasksToCreate.length} new task(s) to today`, 'success');
+                }
+            }
+            // --- End sync logic ---
 
             // Record action with previous state for undo
             recordAction(

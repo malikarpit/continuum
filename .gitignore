@@ -41,3 +41,7 @@ Thumbs.db
 # Cache
 .cache
 *.tsbuildinfo
+
+# Local development configs
+*.local.js
+config.local.js

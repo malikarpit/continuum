@@ -57,10 +57,7 @@ export async function applyTemplateToDay(date, template = null, options = {}) {
 
     // Check if template already applied
     let day = await getDay(dateStr);
-    if (day?.templateApplied) {
-        console.log('[DayEngine] Template already applied for', dateStr);
-        return { day, tasks: [], training: null, meals: [] };
-    }
+
 
     // Create day if not exists
     if (!day) {
@@ -128,11 +125,7 @@ export async function applyTemplateToDay(date, template = null, options = {}) {
     day.blocks = template.timeBlocks || [];
     await saveDay(day);
 
-    console.log('[DayEngine] Applied template to', dateStr, {
-        tasks: createdTasks.length,
-        training: !!trainingSession,
-        meals: createdMeals.length,
-    });
+
 
     return { day, tasks: createdTasks, training: trainingSession, meals: createdMeals };
 }
@@ -173,7 +166,7 @@ export async function markDayItemsInactive(date) {
         }
     }
 
-    console.log('[DayEngine] Marked items inactive for', dateStr);
+
 }
 
 /**
@@ -302,17 +295,11 @@ export async function initializeCurrentDay(dayBoundaryHour = 4) {
 
     // Activate any scheduled tasks that are due
     const activatedTasks = await activateScheduledTasks(adjustedDate);
-    if (activatedTasks.length > 0) {
-        console.log('[DayEngine] Activated', activatedTasks.length, 'scheduled tasks');
-        result.tasks = [...result.tasks, ...activatedTasks];
-    }
+
 
     // Instantiate recurring tasks for today
     const recurringTasks = await instantiateRecurringTasks(adjustedDate);
-    if (recurringTasks.length > 0) {
-        console.log('[DayEngine] Created', recurringTasks.length, 'recurring tasks');
-        result.tasks = [...result.tasks, ...recurringTasks];
-    }
+
 
     return result;
 }

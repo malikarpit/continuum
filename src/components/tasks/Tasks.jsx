@@ -53,7 +53,10 @@ export default function Tasks() {
     const [showAddModal, setShowAddModal] = useState(false);
     const [showSkipModal, setShowSkipModal] = useState(null);
     const [filter, setFilter] = useState('all');
-    const [viewMode, setViewMode] = useState('grid'); // 'grid' or 'list'
+    // Default to list view on mobile for better display
+    const [viewMode, setViewMode] = useState(() =>
+        typeof window !== 'undefined' && window.innerWidth < 768 ? 'list' : 'grid'
+    );
     const [editMode, setEditMode] = useState(false);
     const [dragging, setDragging] = useState(null);
     const [resizing, setResizing] = useState(null);
@@ -66,6 +69,8 @@ export default function Tasks() {
         if (filter === 'pending') return task.status === TASK_STATUS.PENDING;
         if (filter === 'completed') return task.status === TASK_STATUS.COMPLETED;
         if (filter === 'skipped') return task.status === TASK_STATUS.SKIPPED;
+        if (filter === 'template') return task.templateId != null;
+        if (filter === 'manual') return task.templateId == null;
         return task.category === filter;
     });
 
@@ -290,7 +295,7 @@ export default function Tasks() {
                 </div>
             </div>
 
-            {/* Filters */}
+            {/* Status Filters */}
             <div className="task-filters">
                 {['all', 'pending', 'completed', 'skipped'].map(f => (
                     <button
@@ -301,6 +306,22 @@ export default function Tasks() {
                         {f.charAt(0).toUpperCase() + f.slice(1)}
                     </button>
                 ))}
+            </div>
+
+            {/* Source Filters */}
+            <div className="task-filters source-filters">
+                <button
+                    className={`filter-btn source-btn ${filter === 'template' ? 'active' : ''}`}
+                    onClick={() => setFilter('template')}
+                >
+                    📅 Template ({tasks.filter(t => t.templateId != null).length})
+                </button>
+                <button
+                    className={`filter-btn source-btn ${filter === 'manual' ? 'active' : ''}`}
+                    onClick={() => setFilter('manual')}
+                >
+                    ✏️ Manual ({tasks.filter(t => t.templateId == null).length})
+                </button>
             </div>
 
             {/* Edit mode banner */}
@@ -944,9 +965,13 @@ const tasksStyles = `
     .task-filters {
         display: flex;
         gap: var(--spacing-2);
-        margin-bottom: var(--spacing-6);
+        margin-bottom: var(--spacing-3);
         overflow-x: auto;
         padding-bottom: var(--spacing-2);
+    }
+
+    .task-filters.source-filters {
+        margin-bottom: var(--spacing-6);
     }
 
     .filter-btn {
@@ -970,6 +995,28 @@ const tasksStyles = `
         background: var(--color-accent);
         border-color: var(--color-accent);
         color: white;
+    }
+
+    .filter-divider {
+        color: var(--color-border);
+        display: flex;
+        align-items: center;
+        padding: 0 var(--spacing-1);
+    }
+
+    .filter-btn.source-btn {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-1);
+    }
+
+    .filter-btn .filter-count {
+        font-size: var(--font-size-xs);
+        opacity: 0.8;
+    }
+
+    .filter-btn.source-btn.active {
+        background: linear-gradient(135deg, var(--color-accent) 0%, #8b5cf6 100%);
     }
 
     /* Edit mode banner */

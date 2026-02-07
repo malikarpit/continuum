@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useAppStore } from '../../store/appStore';
-import { MEAL_STATUS, MEAL_TYPE, MEAL_SKIP_REASONS, FOOD_CATEGORY, QUICK_ITEMS } from '../../db/mealStore';
+import { MEAL_STATUS, MEAL_TYPE, MEAL_SKIP_REASONS, FOOD_CATEGORY, QUICK_ITEMS, getQuickItems, createCustomQuickItem } from '../../db/mealStore';
 
 export default function Meals() {
   const {
@@ -19,13 +19,16 @@ export default function Meals() {
     skipMeal,
     removeFood,
     searchFood,
-    showToast
+    showToast,
+    addQuickItem,
+    removeQuickItem
   } = useAppStore();
 
   const [selectedMeal, setSelectedMeal] = useState(null);
   const [showFoodModal, setShowFoodModal] = useState(false);
   const [showSkipModal, setShowSkipModal] = useState(null);
   const [quickAddItem, setQuickAddItem] = useState(null); // For meal selection popup
+  const [showQuickEditor, setShowQuickEditor] = useState(false); // For quick items editor
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
 
@@ -216,16 +219,25 @@ export default function Meals() {
 
       {/* Quick Counters - Horizontal scroll for 6+ items */}
       <section className="quick-counters card mt-4">
-        <h3 className="section-label mb-3">⚡ Quick Add</h3>
+        <div className="quick-header">
+          <h3 className="section-label mb-3">⚡ Quick Add</h3>
+          <button
+            className="btn btn-ghost btn-sm edit-quick-btn"
+            onClick={() => setShowQuickEditor(true)}
+            title="Edit quick items"
+          >
+            ✏️ Edit
+          </button>
+        </div>
         <div className="quick-buttons-wrapper">
           <div className="quick-buttons">
-            {Object.entries(QUICK_ITEMS).map(([key, item]) => (
+            {getQuickItems(settings).map((item) => (
               <button
-                key={key}
+                key={item.id || item.key}
                 className="quick-btn"
                 onClick={() => {
                   // Open meal selector popup
-                  setQuickAddItem({ key, item });
+                  setQuickAddItem({ key: item.key || item.id, item });
                 }}
               >
                 <span className="quick-icon">{item.icon}</span>
@@ -310,6 +322,23 @@ export default function Meals() {
             }
           }}
           onClose={() => setQuickAddItem(null)}
+        />
+      )}
+
+      {/* Quick Item Editor Modal */}
+      {showQuickEditor && (
+        <QuickItemEditorModal
+          settings={settings}
+          onAdd={async (item) => {
+            const newItem = createCustomQuickItem(item);
+            await addQuickItem(newItem);
+            showToast(`Added ${newItem.name} to quick add`, 'success');
+          }}
+          onRemove={async (itemId) => {
+            await removeQuickItem(itemId);
+            showToast('Item removed', 'success');
+          }}
+          onClose={() => setShowQuickEditor(false)}
         />
       )}
 
@@ -731,6 +760,148 @@ function QuickAddMealSelector({ item, meals, onSelect, onClose }) {
 
         <div className="modal-footer">
           <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Quick Item Editor Modal - For adding/removing quick add items
+function QuickItemEditorModal({ settings, onAdd, onRemove, onClose }) {
+  const [newItem, setNewItem] = useState({
+    name: '',
+    protein: '',
+    calories: '',
+    carbs: '',
+    fats: '',
+    icon: '🍽️',
+  });
+
+  // Common emoji options for food
+  const emojiOptions = ['🍽️', '🥗', '🥩', '🧀', '🥛', '🍲', '🥜', '🍳', '🥤', '🍌'];
+
+  const handleAdd = () => {
+    if (!newItem.name.trim()) return;
+    onAdd(newItem);
+    setNewItem({ name: '', protein: '', calories: '', carbs: '', fats: '', icon: '🍽️' });
+  };
+
+  // Get current items for display
+  const allItems = getQuickItems(settings);
+  const customItems = allItems.filter(item => !item.isDefault);
+  const defaultItems = allItems.filter(item => item.isDefault);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal quick-editor-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2 className="modal-title">Edit Quick Add Items</h2>
+          <button className="btn btn-ghost btn-icon" onClick={onClose}>×</button>
+        </div>
+
+        <div className="modal-body">
+          {/* Add New Item Form */}
+          <div className="quick-editor-form">
+            <h4 className="text-sm text-secondary mb-3">Add Custom Item</h4>
+
+            <div className="form-row">
+              <div className="emoji-picker">
+                {emojiOptions.map(emoji => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    className={`emoji-btn ${newItem.icon === emoji ? 'active' : ''}`}
+                    onClick={() => setNewItem({ ...newItem, icon: emoji })}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <input
+              type="text"
+              className="input mb-2"
+              placeholder="Item name (e.g., Protein Bar)"
+              value={newItem.name}
+              onChange={e => setNewItem({ ...newItem, name: e.target.value })}
+            />
+
+            <div className="macro-inputs">
+              <div className="macro-input">
+                <input
+                  type="number"
+                  className="input"
+                  placeholder="Protein"
+                  value={newItem.protein}
+                  onChange={e => setNewItem({ ...newItem, protein: e.target.value })}
+                />
+                <span className="input-suffix">g</span>
+              </div>
+              <div className="macro-input">
+                <input
+                  type="number"
+                  className="input"
+                  placeholder="Calories"
+                  value={newItem.calories}
+                  onChange={e => setNewItem({ ...newItem, calories: e.target.value })}
+                />
+                <span className="input-suffix">kcal</span>
+              </div>
+            </div>
+
+            <button
+              className="btn btn-primary w-full mt-3"
+              onClick={handleAdd}
+              disabled={!newItem.name.trim()}
+            >
+              + Add Item
+            </button>
+          </div>
+
+          {/* Custom Items List (deletable) */}
+          {customItems.length > 0 && (
+            <div className="quick-items-list mt-4">
+              <h4 className="text-sm text-secondary mb-2">Your Custom Items</h4>
+              {customItems.map(item => (
+                <div key={item.id} className="quick-item-row">
+                  <span className="item-icon">{item.icon}</span>
+                  <div className="item-info">
+                    <span className="item-name">{item.name}</span>
+                    <span className="item-macros text-secondary">
+                      {item.protein}g P • {item.calories} kcal
+                    </span>
+                  </div>
+                  <button
+                    className="btn btn-ghost btn-sm delete-btn"
+                    onClick={() => onRemove(item.id)}
+                  >
+                    ❌
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Default Items (read-only for now) */}
+          <div className="quick-items-list mt-4">
+            <h4 className="text-sm text-muted mb-2">Default Items</h4>
+            {defaultItems.map(item => (
+              <div key={item.key} className="quick-item-row default">
+                <span className="item-icon">{item.icon}</span>
+                <div className="item-info">
+                  <span className="item-name">{item.name}</span>
+                  <span className="item-macros text-secondary">
+                    {item.protein}g P • {item.calories} kcal
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>Done</button>
         </div>
       </div>
     </div>
@@ -1380,6 +1551,7 @@ const mealsStyles = `
   .meal-selector-name {
     font-weight: var(--font-weight-semibold);
     font-size: var(--font-size-lg);
+    color: var(--color-text-primary);
   }
 
   .meal-selector-stats {
@@ -1396,5 +1568,126 @@ const mealsStyles = `
     color: white;
     font-size: var(--font-size-xs);
     border-radius: var(--radius-sm);
+  }
+
+  /* Quick Add Header */
+  .quick-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .edit-quick-btn {
+    font-size: var(--font-size-sm);
+  }
+
+  /* Quick Item Editor Modal */
+  .quick-editor-modal {
+    max-width: 450px;
+  }
+
+  .quick-editor-form {
+    padding: var(--spacing-4);
+    background: var(--color-bg-tertiary);
+    border-radius: var(--radius-lg);
+  }
+
+  .emoji-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-2);
+    margin-bottom: var(--spacing-3);
+  }
+
+  .emoji-btn {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    background: var(--color-bg-secondary);
+    border: 2px solid transparent;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .emoji-btn:hover {
+    background: var(--color-bg-tertiary);
+    transform: scale(1.1);
+  }
+
+  .emoji-btn.active {
+    border-color: var(--color-accent);
+    background: rgba(99, 102, 241, 0.2);
+  }
+
+  .macro-inputs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-2);
+  }
+
+  .macro-input {
+    position: relative;
+  }
+
+  .macro-input .input {
+    padding-right: 40px;
+  }
+
+  .input-suffix {
+    position: absolute;
+    right: var(--spacing-3);
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+  }
+
+  .quick-items-list {
+    padding: var(--spacing-3);
+    background: var(--color-bg-secondary);
+    border-radius: var(--radius-md);
+  }
+
+  .quick-item-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-3);
+    padding: var(--spacing-2) 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .quick-item-row:last-child {
+    border-bottom: none;
+  }
+
+  .quick-item-row.default {
+    opacity: 0.7;
+  }
+
+  .quick-item-row .item-icon {
+    font-size: 1.25rem;
+  }
+
+  .quick-item-row .item-info {
+    flex: 1;
+  }
+
+  .quick-item-row .item-name {
+    display: block;
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
+  }
+
+  .quick-item-row .item-macros {
+    display: block;
+    font-size: var(--font-size-xs);
+  }
+
+  .quick-item-row .delete-btn {
+    padding: var(--spacing-1);
   }
 `;

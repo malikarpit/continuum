@@ -16,7 +16,8 @@ import {
   MUSCLE_DETAILS,
   getExercisesForMuscle,
   createExercise,
-  skipExercise
+  skipExercise,
+  EXERCISE_DATABASE,
 } from '../../db/trainingStore';
 import { isGymClosedDay, getSuggestedTrainingMode } from '../../db/phaseStore';
 
@@ -40,6 +41,9 @@ export default function Training() {
     addExercise,
     deleteExercise,
     settings,
+    // Training Plan
+    updateDayPlan,
+    getTodayPlannedWorkout,
   } = useAppStore();
 
   // Navigation state
@@ -70,6 +74,14 @@ export default function Training() {
     checkGymClosure();
   }, [currentDay]);
 
+  // Auto-select environment from user's primaryEquipment preference (if not already selected)
+  useEffect(() => {
+    if (!environment && !isGymClosed && settings?.primaryEquipment) {
+      // Only auto-proceed if user has a preference set
+      // setEnvironment(settings.primaryEquipment); // Uncomment to auto-skip step 1
+    }
+  }, [settings?.primaryEquipment, isGymClosed]);
+
   // Edit mode state
   const [editMode, setEditMode] = useState(false);
   const [editingField, setEditingField] = useState(null);
@@ -77,14 +89,29 @@ export default function Training() {
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [newExercise, setNewExercise] = useState({ name: '', sets: 4, targetReps: 10, equipment: '', formTip: '' });
 
+  // Training Plan state
+  const [showPlanEditor, setShowPlanEditor] = useState(false);
+  const [editingDay, setEditingDay] = useState(null); // 'monday', 'tuesday', etc.
+  const [showExerciseEditor, setShowExerciseEditor] = useState(false);
+  const [editingMuscleGroup, setEditingMuscleGroup] = useState(null); // For exercise editor
+
   // Workout state
   const [showSkipModal, setShowSkipModal] = useState(false);
   const [showSkipExerciseModal, setShowSkipExerciseModal] = useState(false);
+  const [showNewWorkoutSelection, setShowNewWorkoutSelection] = useState(false); // Override to show selection even if workout completed
   const [currentWeight, setCurrentWeight] = useState('');
+
+  // Auto-skip completed view on re-entry/navigation
+  useEffect(() => {
+    if (training?.status === TRAINING_STATUS.COMPLETED) {
+      setShowNewWorkoutSelection(true);
+    }
+  }, []); // Run only on mount
   const [currentReps, setCurrentReps] = useState('');
   const [currentDistance, setCurrentDistance] = useState('');
   const [currentSpeed, setCurrentSpeed] = useState('');
   const [currentDuration, setCurrentDuration] = useState('');
+  const [currentElevation, setCurrentElevation] = useState('');
 
   // Rest timer countdown
   useEffect(() => {
@@ -110,6 +137,12 @@ export default function Training() {
       setBodyRegion(null);
     } else if (step === 4) {
       setStep(3);
+      setMuscleGroup(null);
+    } else if (step === 5) {
+      // From workout view, return to main selection
+      setStep(1);
+      setEnvironment(null);
+      setBodyRegion(null);
       setMuscleGroup(null);
     }
   };
@@ -343,7 +376,17 @@ export default function Training() {
     );
   }
 
-  if (training?.status === TRAINING_STATUS.COMPLETED) {
+  if (training?.status === TRAINING_STATUS.COMPLETED && !showNewWorkoutSelection) {
+    const handleStartNewWorkout = () => {
+      // Reset selection state and enable override to show selection UI
+      setStep(1);
+      setEnvironment(null);
+      setBodyRegion(null);
+      setMuscleGroup(null);
+      setEditMode(false);
+      setShowNewWorkoutSelection(true); // Override the COMPLETED view
+    };
+
     return (
       <div className="training-view animate-fade-in">
         <div className="status-card completed">
@@ -368,13 +411,25 @@ export default function Training() {
               <div className="stat-label">Minutes</div>
             </div>
           </div>
+          <button className="btn btn-primary mt-6" onClick={handleStartNewWorkout}>
+            Start New Workout
+          </button>
         </div>
         <style>{trainingStyles}</style>
       </div>
     );
   }
 
-  if (training?.status === TRAINING_STATUS.SKIPPED) {
+  if (training?.status === TRAINING_STATUS.SKIPPED && !showNewWorkoutSelection) {
+    const handleStartNewWorkout = () => {
+      setStep(1);
+      setEnvironment(null);
+      setBodyRegion(null);
+      setMuscleGroup(null);
+      setEditMode(false);
+      setShowNewWorkoutSelection(true); // Override the SKIPPED view
+    };
+
     return (
       <div className="training-view animate-fade-in">
         <div className="status-card skipped">
@@ -382,6 +437,9 @@ export default function Training() {
           <h2>Workout Skipped</h2>
           <p className="text-secondary">Reason: {training.skipReason}</p>
           <p className="text-muted mt-4">Tomorrow is a new day. Consistency over perfection.</p>
+          <button className="btn btn-primary mt-6" onClick={handleStartNewWorkout}>
+            Start New Workout
+          </button>
         </div>
         <style>{trainingStyles}</style>
       </div>
@@ -394,7 +452,98 @@ export default function Training() {
 
   // Render in-progress UI based on persisted status (not just volatile isTrainingActive flag)
   // This allows resuming workouts after page refresh
-  if (training?.status === TRAINING_STATUS.IN_PROGRESS && currentExercise) {
+  if (training?.status === TRAINING_STATUS.IN_PROGRESS) {
+    const safeExercise = currentExercise || training.exercises?.[0];
+
+    if (!safeExercise) {
+      const handleLoadDefaultExercises = async () => {
+        // Try to load default exercises based on focusMuscle
+        const focusMuscle = training.focusMuscle || muscleGroup;
+        const env = environment || 'gym';
+
+        if (focusMuscle) {
+          const defaultExercises = getExercisesForMuscle(env, focusMuscle);
+          if (defaultExercises && defaultExercises.length > 0) {
+            const exercises = defaultExercises.map(e => createExercise(e));
+            const updatedTraining = { ...training, exercises };
+            await useAppStore.getState().updateTraining(updatedTraining);
+            showToast(`Loaded ${exercises.length} exercises for ${focusMuscle}`, 'success');
+            return;
+          }
+        }
+        showToast('No default exercises found. Please go back and select a muscle group.', 'warning');
+      };
+
+      return (
+        <div className="training-view animate-fade-in">
+          <div className="status-card error">
+            <div className="status-icon">⚠️</div>
+            <h2>No Exercises Found</h2>
+            <p className="text-secondary">This workout doesn't have exercises loaded yet.</p>
+            <div className="flex gap-2 mt-4 flex-wrap justify-center">
+              <button className="btn btn-primary" onClick={handleLoadDefaultExercises}>
+                Load Default Exercises
+              </button>
+              <button className="btn btn-secondary" onClick={handleFinishWorkout}>
+                End Workout
+              </button>
+            </div>
+          </div>
+          <style>{trainingStyles}</style>
+        </div>
+      );
+    }
+
+    // Edit/Swap Mode - Show exercise selection to swap current exercise
+    if (editMode) {
+      return (
+        <div className="training-view animate-fade-in">
+          <div className="card">
+            <h2 className="text-xl font-semibold mb-4">Edit / Swap Exercise</h2>
+            <p className="text-secondary mb-4">
+              Current: <strong>{safeExercise.name}</strong>
+            </p>
+
+            <div className="exercise-list">
+              <h3 className="text-sm text-secondary mb-2">Swap with another exercise:</h3>
+              {training.exercises?.filter((_, i) => i !== currentExerciseIndex).map((ex, i) => (
+                <button
+                  key={ex.id || i}
+                  className="btn btn-ghost w-full text-left mb-2"
+                  onClick={async () => {
+                    // Swap exercises by moving current to later and target to current position
+                    const newExercises = [...training.exercises];
+                    const currentIdx = currentExerciseIndex;
+                    const targetIdx = training.exercises.findIndex(e => e.id === ex.id);
+                    [newExercises[currentIdx], newExercises[targetIdx]] = [newExercises[targetIdx], newExercises[currentIdx]];
+
+                    // Update training with swapped exercises
+                    const updatedTraining = { ...training, exercises: newExercises };
+                    await useAppStore.getState().updateTraining(updatedTraining);
+                    await useAppStore.getState().refreshDay();
+                    setEditMode(false);
+                    showToast(`Swapped to ${ex.name}`, 'success');
+                  }}
+                >
+                  <span className="font-medium">{ex.name}</span>
+                  <span className="text-secondary text-sm ml-2">
+                    {ex.sets} × {ex.targetReps}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <div className="flex gap-2 mt-4">
+              <button className="btn btn-secondary flex-1" onClick={() => setEditMode(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+          <style>{trainingStyles}</style>
+        </div>
+      );
+    }
+
     return (
       <div className="training-view animate-fade-in">
         <div className="workout-progress-header">
@@ -404,7 +553,7 @@ export default function Training() {
           <div className="flex items-center gap-2">
             <WorkoutTimer startTime={training.startTime} />
             <span className="exercise-progress text-sm text-secondary">
-              {currentExerciseIndex + 1}/{totalExercises}
+              {(currentExerciseIndex || 0) + 1}/{totalExercises}
             </span>
           </div>
         </div>
@@ -412,26 +561,48 @@ export default function Training() {
         <div className="progress-bar mb-6">
           <div
             className="progress-bar-fill"
-            style={{ width: `${((currentExerciseIndex) / totalExercises) * 100}%` }}
+            style={{ width: `${((currentExerciseIndex || 0) / (totalExercises || 1)) * 100}%` }}
           />
         </div>
 
         <div className="exercise-card card">
-          <h2 className="exercise-name">{currentExercise.name}</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+            <h2 className="exercise-name" style={{ margin: 0 }}>{safeExercise.name}</h2>
+            <span style={{
+              padding: '2px 8px',
+              borderRadius: '4px',
+              fontSize: '0.7rem',
+              textTransform: 'uppercase',
+              background: safeExercise.exerciseType === 'cardio' ? 'var(--warning-color)'
+                : safeExercise.exerciseType === 'isometric' ? 'var(--info-color)'
+                  : 'var(--primary-color)',
+              color: 'white',
+            }}>
+              {safeExercise.exerciseType || 'strength'}
+            </span>
+          </div>
           <p className="last-week text-secondary">
-            Target: {currentExercise.sets} sets × {currentExercise.targetReps} reps
+            {safeExercise.exerciseType === 'cardio'
+              ? `Target: ${safeExercise.duration || 30} min${safeExercise.speed ? ` @ ${safeExercise.speed} km/h` : ''}${safeExercise.elevation ? ` • ${safeExercise.elevation}% incline` : ''}`
+              : safeExercise.exerciseType === 'isometric'
+                ? `Target: ${safeExercise.sets || 3} holds × ${safeExercise.holdTime || 60} seconds`
+                : `Target: ${safeExercise.sets || 4} sets × ${safeExercise.targetReps || 10} reps${safeExercise.weight ? ` @ ${safeExercise.weight}kg` : ''}`
+            }
           </p>
 
-          <div className="set-indicators">
-            {Array.from({ length: currentExercise.sets }).map((_, i) => (
-              <div
-                key={i}
-                className={`set-indicator ${i < completedSets ? 'completed' : i === completedSets ? 'current' : ''}`}
-              >
-                {i + 1}
-              </div>
-            ))}
-          </div>
+          {/* Set/Hold indicators - show for strength, bodyweight, isometric */}
+          {safeExercise.exerciseType !== 'cardio' && (
+            <div className="set-indicators">
+              {Array.from({ length: safeExercise.sets || 3 }).map((_, i) => (
+                <div
+                  key={i}
+                  className={`set-indicator ${i < completedSets ? 'completed' : i === completedSets ? 'current' : ''}`}
+                >
+                  {i + 1}
+                </div>
+              ))}
+            </div>
+          )}
 
           {restTimer > 0 && (
             <div className="rest-timer">
@@ -445,110 +616,178 @@ export default function Training() {
             </div>
           )}
 
-          {restTimer === 0 && completedSets < currentExercise.sets && (
+          {restTimer === 0 && completedSets < (safeExercise.sets || 1) && (
             <div className="set-input">
-              <h3 className="set-number">Set {completedSets + 1}</h3>
-              <div className="input-row">
-                <div className="input-group">
-                  <label className="label">Weight (kg)</label>
-                  <input
-                    type="number"
-                    className="input"
-                    placeholder="0"
-                    value={currentWeight}
-                    onChange={e => setCurrentWeight(e.target.value)}
-                  />
+              <h3 className="set-number">
+                {safeExercise.exerciseType === 'cardio'
+                  ? 'Log Cardio Session'
+                  : safeExercise.exerciseType === 'isometric'
+                    ? `Hold ${completedSets + 1} of ${safeExercise.sets || 3}`
+                    : `Set ${completedSets + 1}`
+                }
+              </h3>
+
+              {/* Strength/Bodyweight: Weight and Reps */}
+              {(safeExercise.exerciseType === 'strength' || safeExercise.exerciseType === 'bodyweight' || !safeExercise.exerciseType) && (
+                <div className="input-row">
+                  {safeExercise.exerciseType !== 'bodyweight' && (
+                    <div className="input-group">
+                      <label className="label">Weight (kg)</label>
+                      <input
+                        type="number"
+                        className="input"
+                        placeholder={safeExercise.weight || '0'}
+                        value={currentWeight}
+                        onChange={e => setCurrentWeight(e.target.value)}
+                      />
+                    </div>
+                  )}
+                  <div className="input-group">
+                    <label className="label">Reps</label>
+                    <input
+                      type="number"
+                      className="input"
+                      placeholder={safeExercise.targetReps}
+                      value={currentReps}
+                      onChange={e => setCurrentReps(e.target.value)}
+                    />
+                  </div>
                 </div>
-                <div className="input-group">
-                  <label className="label">Reps</label>
-                  <input
-                    type="number"
-                    className="input"
-                    placeholder={currentExercise.targetReps}
-                    value={currentReps}
-                    onChange={e => setCurrentReps(e.target.value)}
-                  />
+              )}
+
+              {/* Cardio: Duration, Speed, Distance, Elevation */}
+              {safeExercise.exerciseType === 'cardio' && (
+                <div className="cardio-inputs">
+                  <div className="input-row">
+                    <div className="input-group">
+                      <label className="label">Duration (min)</label>
+                      <input
+                        type="number"
+                        className="input"
+                        placeholder={safeExercise.duration || '30'}
+                        value={currentDuration}
+                        onChange={e => setCurrentDuration(e.target.value)}
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label className="label">Distance (km)</label>
+                      <input
+                        type="number"
+                        className="input"
+                        placeholder={safeExercise.distance || '0'}
+                        value={currentDistance}
+                        onChange={e => setCurrentDistance(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="input-row mt-2">
+                    <div className="input-group">
+                      <label className="label">Speed (km/h)</label>
+                      <input
+                        type="number"
+                        className="input"
+                        placeholder={safeExercise.speed || '0'}
+                        value={currentSpeed}
+                        onChange={e => setCurrentSpeed(e.target.value)}
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label className="label">Incline (%)</label>
+                      <input
+                        type="number"
+                        className="input"
+                        placeholder={safeExercise.elevation || '0'}
+                        value={currentElevation || ''}
+                        onChange={e => setCurrentElevation && setCurrentElevation(e.target.value)}
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
-              <div className="input-row-3 mt-2">
-                <div className="input-group">
-                  <label className="label text-xs">Dist (km)</label>
-                  <input
-                    type="number"
-                    className="input input-sm"
-                    placeholder="0"
-                    value={currentDistance}
-                    onChange={e => setCurrentDistance(e.target.value)}
-                  />
+              )}
+
+              {/* Isometric: Hold Time */}
+              {safeExercise.exerciseType === 'isometric' && (
+                <div className="input-row">
+                  <div className="input-group">
+                    <label className="label">Hold Time (seconds)</label>
+                    <input
+                      type="number"
+                      className="input"
+                      placeholder={safeExercise.holdTime || '60'}
+                      value={currentDuration}
+                      onChange={e => setCurrentDuration(e.target.value)}
+                    />
+                  </div>
                 </div>
-                <div className="input-group">
-                  <label className="label text-xs">Speed</label>
-                  <input
-                    type="number"
-                    className="input input-sm"
-                    placeholder="0"
-                    value={currentSpeed}
-                    onChange={e => setCurrentSpeed(e.target.value)}
-                  />
-                </div>
-                <div className="input-group">
-                  <label className="label text-xs">Time (min)</label>
-                  <input
-                    type="number"
-                    className="input input-sm"
-                    placeholder="0"
-                    value={currentDuration}
-                    onChange={e => setCurrentDuration(e.target.value)}
-                  />
-                </div>
-              </div>
+              )}
 
               <button
                 className="btn btn-primary w-full mt-4"
                 onClick={handleLogSet}
-                disabled={!currentWeight && !currentReps && !currentDistance && !currentDuration}
+                disabled={
+                  safeExercise.exerciseType === 'cardio'
+                    ? !currentDuration
+                    : safeExercise.exerciseType === 'isometric'
+                      ? !currentDuration
+                      : !currentReps
+                }
               >
-                Complete Set
+                {safeExercise.exerciseType === 'cardio'
+                  ? 'Complete Cardio ✓'
+                  : safeExercise.exerciseType === 'isometric'
+                    ? `Complete Hold ${completedSets + 1} ✓`
+                    : `Complete Set ${completedSets + 1} ✓`
+                }
               </button>
+
+              {/* Skip to next exercise */}
+              {(completedSets > 0 || safeExercise.exerciseType === 'cardio') && (
+                <button
+                  className="btn btn-ghost w-full mt-2"
+                  onClick={() => setShowSkipExerciseModal(true)}
+                  style={{ fontSize: '0.85rem' }}
+                >
+                  Skip remaining → Next exercise
+                </button>
+              )}
             </div>
           )}
 
-          {currentExercise.completedSets?.length > 0 && (
-            <div className="completed-sets mt-4">
-              <h4 className="text-sm text-secondary mb-2">Completed Sets</h4>
-              <div className="sets-list">
-                {currentExercise.completedSets.map((set, i) => (
-                  <div key={i} className="set-badge">
-                    Set {set.setNumber}: {set.weight}kg × {set.reps}
+          {safeExercise.completedSets?.length > 0 && (
+            <div className="history-section mt-6">
+              <h3 className="section-subtitle">Current Session</h3>
+              <div className="history-list">
+                {safeExercise.completedSets.map((set, i) => (
+                  <div key={i} className="history-item">
+                    <span className="set-num">#{set.setNumber}</span>
+                    <span className="set-data">
+                      {set.weight > 0 && `${set.weight}kg × `}
+                      {set.reps} reps
+                    </span>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {currentExercise.formTip && (
-            <div className="form-tip">
-              <span>💡</span>
-              <span>{currentExercise.formTip}</span>
+          {safeExercise.formTip && (
+            <div className="form-tip mt-4">
+              <span className="tip-icon">💡</span>
+              <span>{safeExercise.formTip}</span>
             </div>
           )}
-
-          {/* Skip Exercise Button */}
-          <button
-            className="btn btn-ghost btn-sm mt-4 text-warning"
-            onClick={() => setShowSkipExerciseModal(true)}
-          >
-            ⏭️ Skip This Exercise
-          </button>
         </div>
 
-        <div className="workout-nav mt-6">
-          {currentExerciseIndex === totalExercises - 1 && completedSets >= currentExercise.sets ? (
-            <button className="btn btn-primary btn-lg w-full" onClick={handleFinishWorkout}>
+        <div className="action-buttons-row">
+          <button className="btn btn-secondary flex-1" onClick={() => setEditMode(true)}>
+            Edit / Swap
+          </button>
+          {currentExerciseIndex === totalExercises - 1 && completedSets >= safeExercise.sets ? (
+            <button className="btn btn-success flex-1" onClick={handleFinishWorkout}>
               Finish Workout 🎉
             </button>
           ) : (
-            <button className="btn btn-secondary w-full" onClick={() => setShowSkipModal(true)}>
+            <button className="btn btn-primary w-full" onClick={handleFinishWorkout}>
               End Workout
             </button>
           )}
@@ -632,6 +871,128 @@ export default function Training() {
             </div>
           </div>
 
+          {/* Today's Planned Workout (if plan is set) */}
+          {(() => {
+            const plannedExercises = getTodayPlannedWorkout();
+            // Check if we have planned exercises for today (now an array)
+            if (Array.isArray(plannedExercises) && plannedExercises.length > 0) {
+              // Get exercise types summary
+              const exerciseTypes = [...new Set(plannedExercises.map(ex => ex.exerciseType || 'strength'))];
+              const typeIcons = {
+                strength: '🏋️',
+                cardio: '🏃',
+                isometric: '🧘',
+                bodyweight: '💪'
+              };
+
+              return (
+                <div className="planned-workout-card">
+                  <div className="planned-header">
+                    <span className="planned-icon">{typeIcons[exerciseTypes[0]] || '💪'}</span>
+                    <div className="planned-info">
+                      <strong>Today's Workout</strong>
+                      <span className="planned-meta">
+                        {plannedExercises.length} exercise{plannedExercises.length !== 1 ? 's' : ''} planned
+                        {exerciseTypes.length > 1 && ` • ${exerciseTypes.map(t => typeIcons[t]).join(' ')}`}
+                      </span>
+                      <div className="repeat-badge" style={{ display: 'inline-flex', marginLeft: '0.5rem', marginTop: '0.25rem' }}>
+                        ↻ Repeats Weekly
+                      </div>
+                    </div>
+                  </div>
+                  {/* Show exercise list preview */}
+                  <div className="planned-exercises-preview" style={{
+                    marginTop: '0.75rem',
+                    padding: '0.75rem',
+                    background: 'var(--surface-color)',
+                    borderRadius: '6px',
+                    maxHeight: '120px',
+                    overflowY: 'auto'
+                  }}>
+                    {plannedExercises.slice(0, 4).map((ex, idx) => (
+                      <div key={ex.id || idx} style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        padding: '0.25rem 0',
+                        fontSize: '0.85rem'
+                      }}>
+                        <span style={{ opacity: 0.6 }}>{idx + 1}.</span>
+                        <span>{ex.name}</span>
+                        <span style={{ marginLeft: 'auto', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                          {ex.exerciseType === 'cardio'
+                            ? `${ex.duration || 30}min`
+                            : ex.exerciseType === 'isometric'
+                              ? `${ex.sets || 3}×${ex.holdTime || 60}s`
+                              : `${ex.sets || 4}×${ex.targetReps || 10}`
+                          }
+                        </span>
+                      </div>
+                    ))}
+                    {plannedExercises.length > 4 && (
+                      <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '0.25rem' }}>
+                        +{plannedExercises.length - 4} more...
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    style={{ marginTop: '0.75rem', width: '10%' }}
+                    onClick={async () => {
+                      // Start workout with the planned exercises
+                      await startWorkout('strength', 'standard', plannedExercises, null);
+                    }}
+                  >
+                    Start Planned Workout →
+                  </button>
+                </div>
+              );
+            }
+            return null;
+          })()}
+
+          {/* Weekly Plan Grid */}
+          <div className="weekly-plan-section">
+            <div className="weekly-plan-header">
+              <span className="section-title">📅 Weekly Plan</span>
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowPlanEditor(true)}>
+                Edit
+              </button>
+            </div>
+            <div className="weekly-plan-grid">
+              {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((dayShort, idx) => {
+                const dayFull = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'][idx];
+                const dayExercises = settings?.trainingPlan?.weeklySchedule?.[dayFull];
+                const exercises = Array.isArray(dayExercises) ? dayExercises : [];
+                const isToday = new Date().getDay() === (idx + 1) % 7;
+                const hasExercises = exercises.length > 0;
+
+                // Get first exercise type for icon
+                const firstType = exercises[0]?.exerciseType || 'strength';
+                const typeIcons = { strength: '🏋️', cardio: '🏃', isometric: '🧘', bodyweight: '💪' };
+
+                return (
+                  <div
+                    key={dayFull}
+                    className={`plan-day ${isToday ? 'today' : ''} ${hasExercises ? 'has-plan' : ''}`}
+                    onClick={() => {
+                      setEditingDay(dayFull);
+                      setShowPlanEditor(true);
+                    }}
+                  >
+                    <span className="day-label">{dayShort}</span>
+                    <span className="day-icon">
+                      {hasExercises ? typeIcons[firstType] || '💪' : '—'}
+                    </span>
+                    <span className="day-focus">
+                      {hasExercises ? `${exercises.length}` : ''}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Gym Closure Banner */}
           {isGymClosed && (
             <div className="gym-closure-banner">
@@ -669,21 +1030,60 @@ export default function Training() {
       {step === 2 && (
         <section className="selection-section">
           <div className="region-buttons">
-            <button className="region-btn" onClick={() => selectBodyRegion('upper')}>
-              <span className="region-icon">🔼</span>
-              <span className="region-label">Upper Body</span>
-              <span className="region-desc">Chest, Back, Shoulders, Arms</span>
-            </button>
-            <button className="region-btn" onClick={() => selectBodyRegion('lower')}>
-              <span className="region-icon">🔽</span>
-              <span className="region-label">Lower Body</span>
-              <span className="region-desc">Quads, Hamstrings, Glutes, Calves</span>
-            </button>
-            <button className="region-btn" onClick={() => selectBodyRegion('core')}>
-              <span className="region-icon">🔥</span>
-              <span className="region-label">Core</span>
-              <span className="region-desc">Abs, Obliques, Lower Back</span>
-            </button>
+            <div className="region-btn-container">
+              <button className="region-btn" onClick={() => selectBodyRegion('upper')}>
+                <span className="region-icon">🔼</span>
+                <span className="region-label">Upper Body</span>
+                <span className="region-desc">Chest, Back, Shoulders, Arms</span>
+              </button>
+              <button
+                className="btn-edit-exercises"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingMuscleGroup('upper');
+                  setShowExerciseEditor(true);
+                }}
+                title="Edit exercises for upper body"
+              >
+                ✏️
+              </button>
+            </div>
+            <div className="region-btn-container">
+              <button className="region-btn" onClick={() => selectBodyRegion('lower')}>
+                <span className="region-icon">🔽</span>
+                <span className="region-label">Lower Body</span>
+                <span className="region-desc">Quads, Hamstrings, Glutes, Calves</span>
+              </button>
+              <button
+                className="btn-edit-exercises"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingMuscleGroup('lower');
+                  setShowExerciseEditor(true);
+                }}
+                title="Edit exercises for lower body"
+              >
+                ✏️
+              </button>
+            </div>
+            <div className="region-btn-container">
+              <button className="region-btn" onClick={() => selectBodyRegion('core')}>
+                <span className="region-icon">🔥</span>
+                <span className="region-label">Core</span>
+                <span className="region-desc">Abs, Obliques, Lower Back</span>
+              </button>
+              <button
+                className="btn-edit-exercises"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingMuscleGroup('core');
+                  setShowExerciseEditor(true);
+                }}
+                title="Edit exercises for core"
+              >
+                ✏️
+              </button>
+            </div>
           </div>
         </section>
       )}
@@ -1257,6 +1657,34 @@ export default function Training() {
         <SkipWorkoutModal onClose={() => setShowSkipModal(false)} onSkip={handleSkip} />
       )}
 
+      {/* Weekly Plan Editor Modal */}
+      {showPlanEditor && (
+        <WeeklyPlanEditorModal
+          settings={settings}
+          editingDay={editingDay}
+          onSave={async (day, config) => {
+            await updateDayPlan(day, config);
+            showToast(`${day.charAt(0).toUpperCase() + day.slice(1)} updated!`, 'success');
+          }}
+          onClose={() => {
+            setShowPlanEditor(false);
+            setEditingDay(null);
+          }}
+        />
+      )}
+
+      {/* Exercise Editor Modal */}
+      {showExerciseEditor && (
+        <ExerciseEditorModal
+          region={editingMuscleGroup}
+          environment={environment || 'gym'}
+          onClose={() => {
+            setShowExerciseEditor(false);
+            setEditingMuscleGroup(null);
+          }}
+        />
+      )}
+
       <style>{trainingStyles}</style>
     </div>
   );
@@ -1321,6 +1749,503 @@ function SkipWorkoutModal({ onClose, onSkip }) {
         </form>
       </div>
     </div>
+  );
+}
+
+// Weekly Plan Editor Modal - Edit the weekly training schedule
+// Now supports adding multiple exercises from any muscle group for each day
+function WeeklyPlanEditorModal({ settings, editingDay, onSave, onClose }) {
+  const [selectedDay, setSelectedDay] = useState(editingDay || 'monday');
+
+  // Get current exercises for selected day (now an array)
+  const currentExercises = settings?.trainingPlan?.weeklySchedule?.[selectedDay] || [];
+  const [exercises, setExercises] = useState(
+    Array.isArray(currentExercises) ? currentExercises : []
+  );
+
+  // For adding new exercises
+  const [showAddExercise, setShowAddExercise] = useState(false);
+  const [selectedRegion, setSelectedRegion] = useState('upper');
+  const [selectedMuscle, setSelectedMuscle] = useState('');
+  const [selectedEnvironment, setSelectedEnvironment] = useState('gym');
+  const [exerciseType, setExerciseType] = useState('strength');
+  // New state for configuring exercise details
+  const [configuringExercise, setConfiguringExercise] = useState(null);
+  const [editingIndex, setEditingIndex] = useState(null);
+
+  // Update exercises when day changes
+  useEffect(() => {
+    const dayExercises = settings?.trainingPlan?.weeklySchedule?.[selectedDay];
+    setExercises(Array.isArray(dayExercises) ? dayExercises : []);
+  }, [selectedDay, settings]);
+
+  const allMuscles = {
+    upper: MUSCLE_GROUPS.upper,
+    lower: MUSCLE_GROUPS.lower,
+    core: MUSCLE_GROUPS.core,
+  };
+
+  // Get available exercises based on selection
+  const availableExercises = selectedMuscle
+    ? getExercisesForMuscle(selectedEnvironment, selectedMuscle)
+    : [];
+
+  // Handle selecting an exercise to configure
+  const handleSelectExercise = (exercise) => {
+    setConfiguringExercise({
+      ...exercise,
+      exerciseType: exercise.exerciseType || exerciseType,
+      // Ensure default values exist
+      sets: exercise.sets || 4,
+      targetReps: exercise.targetReps || 10,
+      weight: exercise.weight || '',
+      duration: exercise.duration || 30,
+      speed: exercise.speed || '',
+      distance: exercise.distance || '',
+      incline: exercise.incline || '',
+      holdTime: exercise.holdTime || 60,
+      id: exercise.id || `ex_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    });
+  };
+
+  // Handle confirming the configured exercise
+  const handleConfirmExercise = () => {
+    if (!configuringExercise) return;
+
+    if (editingIndex !== null) {
+      // Update existing
+      const updated = [...exercises];
+      updated[editingIndex] = configuringExercise;
+      setExercises(updated);
+      setEditingIndex(null);
+    } else {
+      // Add new
+      setExercises([...exercises, configuringExercise]);
+    }
+
+    setConfiguringExercise(null);
+    setShowAddExercise(false);
+    // Reset selection state
+    setSelectedMuscle('');
+  };
+
+  // Handle editing an existing exercise
+  const handleEditExercise = (index) => {
+    setEditingIndex(index);
+    setConfiguringExercise({ ...exercises[index] });
+    setShowAddExercise(true); // Re-use the add panel area for config
+  };
+
+  const handleRemoveExercise = (index) => {
+    const updated = exercises.filter((_, i) => i !== index);
+    // Update order values
+    updated.forEach((ex, i) => ex.order = i);
+    setExercises(updated);
+  };
+
+  const handleMoveExercise = (index, direction) => {
+    if (
+      (direction === 'up' && index === 0) ||
+      (direction === 'down' && index === exercises.length - 1)
+    ) return;
+
+    const newIndex = direction === 'up' ? index - 1 : index + 1;
+    const updated = [...exercises];
+    [updated[index], updated[newIndex]] = [updated[newIndex], updated[index]];
+    updated.forEach((ex, i) => ex.order = i);
+    setExercises(updated);
+  };
+
+  const handleSave = () => {
+    onSave(selectedDay, exercises);
+    onClose();
+  };
+
+  const handleClear = () => {
+    setExercises([]);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal plan-editor-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '700px', maxHeight: '90vh', overflow: 'auto' }}>
+        <div className="modal-header">
+          <h3>📅 Edit Weekly Plan</h3>
+          <div className="repeat-badge">↻ Repeats Weekly</div>
+          <button className="btn-close" onClick={onClose}>×</button>
+        </div>
+
+        <div className="modal-body">
+          {/* Day Selector Tabs */}
+          <div className="day-tabs">
+            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((dayShort, idx) => {
+              const dayFull = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'][idx];
+              const dayExercises = settings?.trainingPlan?.weeklySchedule?.[dayFull];
+              const hasPlan = Array.isArray(dayExercises) && dayExercises.length > 0;
+              return (
+                <button
+                  key={dayFull}
+                  className={`day-tab ${selectedDay === dayFull ? 'active' : ''} ${hasPlan ? 'has-plan' : ''}`}
+                  onClick={() => setSelectedDay(dayFull)}
+                >
+                  {dayShort}
+                  {hasPlan && <span className="exercise-count">{dayExercises.length}</span>}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Current Exercises List */}
+          <div className="form-group">
+            <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Exercises for {selectedDay.charAt(0).toUpperCase() + selectedDay.slice(1)}</span>
+              <span className="text-secondary" style={{ fontSize: '0.85rem' }}>{exercises.length} exercise{exercises.length !== 1 ? 's' : ''}</span>
+            </label>
+
+            {exercises.length === 0 ? (
+              <div className="empty-state" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+                <p>No exercises planned for this day</p>
+                <p style={{ fontSize: '0.85rem' }}>Click "Add Exercise" to start building your workout</p>
+              </div>
+            ) : (
+              <div className="exercise-list-editor" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {exercises.map((ex, index) => (
+                  <div key={ex.id || index} className="exercise-item" style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                    padding: '0.75rem',
+                    background: 'var(--surface-color)',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-color)',
+                  }}>
+                    <div className="exercise-order" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <button
+                        className="btn-icon-small"
+                        onClick={() => handleMoveExercise(index, 'up')}
+                        disabled={index === 0}
+                        style={{ opacity: index === 0 ? 0.3 : 1, padding: '2px', fontSize: '0.75rem' }}
+                      >▲</button>
+                      <button
+                        className="btn-icon-small"
+                        onClick={() => handleMoveExercise(index, 'down')}
+                        disabled={index === exercises.length - 1}
+                        style={{ opacity: index === exercises.length - 1 ? 0.3 : 1, padding: '2px', fontSize: '0.75rem' }}
+                      >▼</button>
+                    </div>
+                    <div className="exercise-info" style={{ flex: 1, cursor: 'pointer' }} onClick={() => handleEditExercise(index)}>
+                      <div style={{ fontWeight: 500 }}>{ex.name}</div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                        {ex.exerciseType === 'cardio'
+                          ? `${ex.duration || 30} min${ex.speed ? ` @ ${ex.speed} km/h` : ''}${ex.elevation ? ` • ${ex.elevation}% incline` : ''}`
+                          : ex.exerciseType === 'isometric'
+                            ? `${ex.sets || 3} × ${ex.holdTime || 60}s hold`
+                            : `${ex.sets || 4} × ${ex.targetReps || 10}${ex.weight ? ` @ ${ex.weight}kg` : ''}`
+                        }
+                      </div>
+                    </div>
+                    <button
+                      className="btn-icon-small"
+                      onClick={() => handleEditExercise(index)}
+                      style={{ marginRight: '5px', fontSize: '1rem', background: 'none', border: 'none', cursor: 'pointer' }}
+                      title="Edit Exercise"
+                    >
+                      ✏️
+                    </button>
+
+                    <span className="exercise-type-badge" style={{
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      fontSize: '0.7rem',
+                      textTransform: 'uppercase',
+                      background: ex.exerciseType === 'cardio' ? 'var(--warning-color)'
+                        : ex.exerciseType === 'isometric' ? 'var(--info-color)'
+                          : 'var(--primary-color)',
+                      color: 'white',
+                    }}>
+                      {ex.exerciseType || 'strength'}
+                    </span>
+                    <button
+                      className="btn-icon-small btn-danger"
+                      onClick={() => handleRemoveExercise(index)}
+                      style={{ color: 'var(--danger-color)', padding: '4px 8px' }}
+                    >✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Add Exercise Section */}
+          {!showAddExercise ? (
+            <button
+              className="btn btn-primary"
+              onClick={() => setShowAddExercise(true)}
+              style={{ width: '100%', marginTop: '0.5rem' }}
+            >
+              + Add Exercise
+            </button>
+          ) : (
+            <div className="add-exercise-panel" style={{
+              marginTop: '1rem',
+              padding: '1rem',
+              background: 'var(--surface-color)',
+              borderRadius: '8px',
+              border: '1px solid var(--primary-color)',
+            }}>
+              {configuringExercise ? (
+                /* Configuration Form */
+                <div className="exercise-config-form">
+                  <h4 style={{ margin: '0 0 1rem 0' }}>
+                    {editingIndex !== null ? 'Edit' : 'Configure'} {configuringExercise.name}
+                  </h4>
+
+                  <div className="config-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                    {/* Dynamic Inputs based on Type */}
+                    {(configuringExercise.exerciseType === 'strength' || !configuringExercise.exerciseType) && (
+                      <>
+                        <div className="form-group">
+                          <label>Sets</label>
+                          <input
+                            type="number"
+                            className="form-control"
+                            value={configuringExercise.sets}
+                            onChange={(e) => setConfiguringExercise({ ...configuringExercise, sets: parseInt(e.target.value) || 0 })}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Reps</label>
+                          <input
+                            type="number"
+                            className="form-control"
+                            value={configuringExercise.targetReps}
+                            onChange={(e) => setConfiguringExercise({ ...configuringExercise, targetReps: parseInt(e.target.value) || 0 })}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Weight (kg)</label>
+                          <input
+                            type="number"
+                            className="form-control"
+                            value={configuringExercise.weight}
+                            placeholder="Optional"
+                            onChange={(e) => setConfiguringExercise({ ...configuringExercise, weight: e.target.value })}
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {configuringExercise.exerciseType === 'cardio' && (
+                      <>
+                        <div className="form-group">
+                          <label>Duration (min)</label>
+                          <input
+                            type="number"
+                            className="form-control"
+                            value={configuringExercise.duration}
+                            onChange={(e) => setConfiguringExercise({ ...configuringExercise, duration: parseInt(e.target.value) || 0 })}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Speed (km/h)</label>
+                          <input
+                            type="number"
+                            className="form-control"
+                            value={configuringExercise.speed}
+                            placeholder="Optional"
+                            onChange={(e) => setConfiguringExercise({ ...configuringExercise, speed: e.target.value })}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Distance (km)</label>
+                          <input
+                            type="number"
+                            className="form-control"
+                            value={configuringExercise.distance}
+                            placeholder="Optional"
+                            onChange={(e) => setConfiguringExercise({ ...configuringExercise, distance: e.target.value })}
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {configuringExercise.exerciseType === 'isometric' && (
+                      <>
+                        <div className="form-group">
+                          <label>Sets</label>
+                          <input
+                            type="number"
+                            className="form-control"
+                            value={configuringExercise.sets}
+                            onChange={(e) => setConfiguringExercise({ ...configuringExercise, sets: parseInt(e.target.value) || 0 })}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Hold Time (sec)</label>
+                          <input
+                            type="number"
+                            className="form-control"
+                            value={configuringExercise.holdTime}
+                            onChange={(e) => setConfiguringExercise({ ...configuringExercise, holdTime: parseInt(e.target.value) || 0 })}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="config-actions" style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        setConfiguringExercise(null);
+                        if (editingIndex !== null) {
+                          setEditingIndex(null);
+                          setShowAddExercise(false);
+                        }
+                      }}
+                    >
+                      Back
+                    </button>
+                    <button className="btn btn-primary" onClick={handleConfirmExercise}>
+                      {editingIndex !== null ? 'Update Exercise' : 'Add Exercise'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Selection View */
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <h4 style={{ margin: 0 }}>Add Exercise</h4>
+                    <button className="btn btn-ghost btn-sm" onClick={() => setShowAddExercise(false)}>Cancel</button>
+                  </div>
+
+                  {/* Exercise Type Selection */}
+                  <div className="form-group">
+                    <label>Exercise Type</label>
+                    <div className="type-buttons" style={{ display: 'flex', gap: '0.5rem' }}>
+                      {[
+                        { id: 'strength', label: '🏋️ Strength', desc: 'Weight/sets/reps' },
+                        { id: 'cardio', label: '🏃 Cardio', desc: 'Time/speed/distance' },
+                        { id: 'isometric', label: '🧘 Isometric', desc: 'Hold time' },
+                      ].map(type => (
+                        <button
+                          key={type.id}
+                          className={`type-btn ${exerciseType === type.id ? 'active' : ''}`}
+                          onClick={() => setExerciseType(type.id)}
+                          style={{ flex: 1, padding: '0.5rem', textAlign: 'center' }}
+                        >
+                          <div>{type.label}</div>
+                          <div style={{ fontSize: '0.7rem', opacity: 0.7 }}>{type.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Environment Selection */}
+                  <div className="form-group">
+                    <label>Environment</label>
+                    <div className="env-buttons-small" style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button
+                        className={`env-btn-small ${selectedEnvironment === 'gym' ? 'active' : ''}`}
+                        onClick={() => { setSelectedEnvironment('gym'); setSelectedMuscle(''); }}
+                        style={{ flex: 1 }}
+                      >🏋️ Gym</button>
+                      <button
+                        className={`env-btn-small ${selectedEnvironment === 'home' ? 'active' : ''}`}
+                        onClick={() => { setSelectedEnvironment('home'); setSelectedMuscle(''); }}
+                        style={{ flex: 1 }}
+                      >🏠 Home</button>
+                    </div>
+                  </div>
+
+                  {/* Body Region Tabs */}
+                  <div className="form-group">
+                    <label>Body Region</label>
+                    <div className="region-tabs" style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                      {['upper', 'lower', 'core'].map(region => (
+                        <button
+                          key={region}
+                          className={`region-tab ${selectedRegion === region ? 'active' : ''}`}
+                          onClick={() => { setSelectedRegion(region); setSelectedMuscle(''); }}
+                          style={{ flex: 1, padding: '0.5rem', textTransform: 'capitalize' }}
+                        >
+                          {region === 'upper' ? '🔼 Upper' : region === 'lower' ? '🔽 Lower' : '🔥 Core'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Muscle Group Selection */}
+                  <div className="form-group">
+                    <label>Muscle Group</label>
+                    <div className="muscle-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
+                      {allMuscles[selectedRegion]?.map(muscle => (
+                        <button
+                          key={muscle.id}
+                          className={`muscle-btn ${selectedMuscle === muscle.id ? 'active' : ''}`}
+                          onClick={() => setSelectedMuscle(muscle.id)}
+                        >
+                          <span className="muscle-icon">{muscle.icon}</span>
+                          <span className="muscle-name">{muscle.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Available Exercises */}
+                  {selectedMuscle && availableExercises.length > 0 && (
+                    <div className="form-group">
+                      <label>Select Exercise</label>
+                      <div className="exercise-selection-grid">
+                        {availableExercises.map(ex => (
+                          <button
+                            key={ex.name}
+                            className="exercise-select-btn"
+                            onClick={() => handleSelectExercise(ex)}
+                          >
+                            <div className="exercise-name">{ex.name}</div>
+                            <div className="exercise-info">
+                              {ex.sets}×{ex.targetReps} • {ex.equipment || 'Bodyweight'}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Custom Exercise Input for Cardio */}
+                  {exerciseType === 'cardio' && (
+                    <div className="form-group">
+                      <label>Or add custom cardio</label>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        {['Running', 'Cycling', 'Swimming', 'Rowing', 'Jump Rope', 'Elliptical'].map(name => (
+                          <button
+                            key={name}
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => handleSelectExercise({ name, exerciseType: 'cardio', duration: 30 })}
+                          >
+                            {name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={handleClear}>Clear Day</button>
+          <div className="footer-right">
+            <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary" onClick={handleSave}>
+              Save ({exercises.length} exercise{exercises.length !== 1 ? 's' : ''})
+            </button>
+          </div>
+        </div>
+      </div>
+    </div >
   );
 }
 
@@ -1395,6 +2320,320 @@ function SkipExerciseModal({ exerciseName, onClose, onSkip }) {
   );
 }
 
+// Exercise Editor Modal - Add, edit, delete exercises for a body region
+function ExerciseEditorModal({ region, environment, onClose }) {
+  const [selectedMuscle, setSelectedMuscle] = useState(null);
+  const [editingExercise, setEditingExercise] = useState(null);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newExercise, setNewExercise] = useState({
+    name: '',
+    sets: 4,
+    targetReps: 10,
+    weight: null,
+    exerciseType: 'strength',
+    equipment: '',
+    formTip: ''
+  });
+
+  const regionNames = { upper: 'Upper Body', lower: 'Lower Body', core: 'Core' };
+  const muscleGroups = MUSCLE_GROUPS[region] || [];
+
+  // Get exercises for selected muscle
+  const availableExercises = useMemo(() => {
+    if (!selectedMuscle) return [];
+    return getExercisesForMuscle(selectedRegion, selectedMuscle, selectedEnvironment);
+  }, [selectedRegion, selectedMuscle, selectedEnvironment]);
+
+  // Handle selecting an exercise to configure
+  const handleSelectExercise = (exercise) => {
+    setConfiguringExercise({
+      ...exercise,
+      exerciseType: exercise.exerciseType || exerciseType,
+      // Ensure default values exist
+      sets: exercise.sets || 4,
+      targetReps: exercise.targetReps || 10,
+      weight: exercise.weight || '',
+      duration: exercise.duration || 30,
+      speed: exercise.speed || '',
+      distance: exercise.distance || '',
+      incline: exercise.incline || '',
+      holdTime: exercise.holdTime || 60,
+    });
+  };
+
+  // Handle confirming the configured exercise
+  const handleConfirmExercise = () => {
+    if (!configuringExercise) return;
+
+    if (editingIndex !== null) {
+      // Update existing
+      const updated = [...exercises];
+      updated[editingIndex] = configuringExercise;
+      setExercises(updated);
+      setEditingIndex(null);
+    } else {
+      // Add new
+      setExercises([...exercises, configuringExercise]);
+    }
+
+    setConfiguringExercise(null);
+    setShowAddExercise(false);
+    // Reset selection state
+    setSelectedMuscle('');
+  };
+
+  // Handle editing an existing exercise
+  const handleEditExercise = (index) => {
+    setEditingIndex(index);
+    setConfiguringExercise({ ...exercises[index] });
+    setShowAddExercise(true); // Re-use the add panel area for config
+  };
+
+  const getExercisesForDisplay = () => {
+    if (!selectedMuscle) return [];
+    return getExercisesForMuscle(environment, selectedMuscle);
+  };
+
+  const exercises = getExercisesForDisplay();
+
+  const handleAddExercise = async () => {
+    if (!newExercise.name.trim() || !selectedMuscle) return;
+
+    const exercise = createExercise({
+      ...newExercise,
+      id: `custom_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    });
+
+    await addExercise(environment, selectedMuscle, exercise);
+    setNewExercise({ name: '', sets: 4, targetReps: 10, weight: null, exerciseType: 'strength', equipment: '', formTip: '' });
+    setShowAddForm(false);
+    showToast(`Added ${exercise.name}`, 'success');
+  };
+
+  const handleDeleteExercise = async (exerciseName) => {
+    if (!window.confirm(`Delete "${exerciseName}"?`)) return;
+    await deleteExercise(environment, selectedMuscle, exerciseName);
+    showToast(`Deleted ${exerciseName}`, 'success');
+  };
+
+  const handleUpdateExercise = async () => {
+    if (!editingExercise?.name.trim()) return;
+    await updateExercises(environment, selectedMuscle, exercises.map(ex =>
+      ex.name === editingExercise.originalName ? { ...ex, ...editingExercise } : ex
+    ));
+    setEditingExercise(null);
+    showToast('Exercise updated', 'success');
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal exercise-editor-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '700px', maxHeight: '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div className="modal-header">
+          <h3>✏️ Edit {regionNames[region]} Exercises</h3>
+          <span className="badge" style={{ marginLeft: '0.5rem' }}>{environment === 'gym' ? '🏋️ Gym' : '🏠 Home'}</span>
+          <button className="btn-close" onClick={onClose}>×</button>
+        </div>
+
+        <div className="modal-body" style={{ display: 'flex', gap: '1rem', flex: 1, overflow: 'hidden' }}>
+          {/* Muscle Group List */}
+          <div className="muscle-list" style={{ width: '40%', borderRight: '1px solid var(--border-color)', paddingRight: '1rem', overflowY: 'auto' }}>
+            <label className="label mb-2">Select Muscle Group</label>
+            {muscleGroups.map(muscle => (
+              <button
+                key={muscle.id}
+                className={`muscle-select-btn ${selectedMuscle === muscle.id ? 'active' : ''}`}
+                onClick={() => setSelectedMuscle(muscle.id)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  width: '100%',
+                  padding: '0.75rem',
+                  marginBottom: '0.5rem',
+                  background: selectedMuscle === muscle.id ? 'var(--primary-color)' : 'var(--surface-color)',
+                  color: selectedMuscle === muscle.id ? 'white' : 'inherit',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <span>{muscle.icon}</span>
+                <span>{muscle.name}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Exercise List */}
+          <div className="exercise-list-panel" style={{ flex: 1, overflowY: 'auto' }}>
+            {!selectedMuscle ? (
+              <div className="empty-state" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+                <p>← Select a muscle group to view exercises</p>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                  <label className="label">Exercises ({exercises.length})</label>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => setShowAddForm(true)}
+                  >
+                    + Add Exercise
+                  </button>
+                </div>
+
+                {/* Add Exercise Form */}
+                {showAddForm && (
+                  <div className="add-exercise-form" style={{
+                    padding: '1rem',
+                    background: 'var(--surface-color)',
+                    borderRadius: '8px',
+                    marginBottom: '1rem',
+                    border: '1px solid var(--primary-color)'
+                  }}>
+                    <h4 style={{ marginBottom: '0.75rem' }}>New Exercise</h4>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="Exercise name"
+                      value={newExercise.name}
+                      onChange={e => setNewExercise({ ...newExercise, name: e.target.value })}
+                      style={{ marginBottom: '0.5rem' }}
+                    />
+                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                      <select
+                        className="input"
+                        value={newExercise.exerciseType}
+                        onChange={e => setNewExercise({ ...newExercise, exerciseType: e.target.value })}
+                      >
+                        <option value="strength">Strength</option>
+                        <option value="cardio">Cardio</option>
+                        <option value="isometric">Isometric</option>
+                        <option value="bodyweight">Bodyweight</option>
+                      </select>
+                      <input
+                        type="number"
+                        className="input"
+                        placeholder="Sets"
+                        value={newExercise.sets}
+                        onChange={e => setNewExercise({ ...newExercise, sets: parseInt(e.target.value) || 4 })}
+                        style={{ width: '70px' }}
+                      />
+                      <input
+                        type="number"
+                        className="input"
+                        placeholder="Reps"
+                        value={newExercise.targetReps}
+                        onChange={e => setNewExercise({ ...newExercise, targetReps: parseInt(e.target.value) || 10 })}
+                        style={{ width: '70px' }}
+                      />
+                    </div>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="Form tip (optional)"
+                      value={newExercise.formTip}
+                      onChange={e => setNewExercise({ ...newExercise, formTip: e.target.value })}
+                      style={{ marginBottom: '0.75rem' }}
+                    />
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button className="btn btn-primary btn-sm" onClick={handleAddExercise}>Add</button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setShowAddForm(false)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Exercise List */}
+                <div className="exercise-items" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {exercises.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '1rem', color: 'var(--text-secondary)' }}>
+                      No exercises yet. Click "Add Exercise" to create one.
+                    </div>
+                  ) : (
+                    exercises.map((ex, idx) => (
+                      <div
+                        key={ex.name || idx}
+                        className="exercise-item"
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.75rem',
+                          padding: '0.75rem',
+                          background: 'var(--surface-color)',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border-color)',
+                        }}
+                      >
+                        {editingExercise?.originalName === ex.name ? (
+                          // Edit mode
+                          <div style={{ flex: 1, display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <input
+                              type="text"
+                              className="input input-sm"
+                              value={editingExercise.name}
+                              onChange={e => setEditingExercise({ ...editingExercise, name: e.target.value })}
+                              style={{ flex: 1, minWidth: '120px' }}
+                            />
+                            <input
+                              type="number"
+                              className="input input-sm"
+                              value={editingExercise.sets}
+                              onChange={e => setEditingExercise({ ...editingExercise, sets: parseInt(e.target.value) || 4 })}
+                              style={{ width: '50px' }}
+                              placeholder="Sets"
+                            />
+                            <input
+                              type="number"
+                              className="input input-sm"
+                              value={editingExercise.targetReps}
+                              onChange={e => setEditingExercise({ ...editingExercise, targetReps: parseInt(e.target.value) || 10 })}
+                              style={{ width: '50px' }}
+                              placeholder="Reps"
+                            />
+                            <button className="btn btn-primary btn-sm" onClick={handleUpdateExercise}>Save</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => setEditingExercise(null)}>×</button>
+                          </div>
+                        ) : (
+                          // View mode
+                          <>
+                            <span style={{ flex: 1, fontWeight: 500 }}>{ex.name}</span>
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                              {ex.sets || 4}×{ex.targetReps || 10}
+                            </span>
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setEditingExercise({ ...ex, originalName: ex.name })}
+                              title="Edit"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => handleDeleteExercise(ex.name)}
+                              title="Delete"
+                              style={{ color: 'var(--danger-color)' }}
+                            >
+                              🗑️
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="modal-footer" style={{ borderTop: '1px solid var(--border-color)', padding: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
+          <button className="btn btn-secondary" onClick={onClose}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const trainingStyles = `
   .training-view {
     max-width: 600px;
@@ -1403,6 +2642,26 @@ const trainingStyles = `
 
   .view-header {
     margin-bottom: var(--spacing-6);
+  }
+
+  .input {
+    width: 100%;
+    padding: var(--spacing-3);
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-base);
+    transition: border-color var(--transition-fast);
+  }
+
+  .input::placeholder {
+    color: var(--color-text-muted);
+  }
+
+  .input:focus {
+    border-color: var(--color-accent);
+    outline: none;
   }
 
   .view-title {
@@ -1459,9 +2718,16 @@ const trainingStyles = `
   /* ===== HEADER ROW WITH QUICK ACTIONS ===== */
   .header-row {
     display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
+    flex-direction: column;
     gap: var(--spacing-4);
+  }
+
+  @media (min-width: 600px) {
+    .header-row {
+      flex-direction: row;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
   }
 
   .quick-actions-top {
@@ -1473,16 +2739,25 @@ const trainingStyles = `
   /* ===== LARGE CENTERED ENVIRONMENT BUTTONS ===== */
   .env-section {
     display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 400px;
+    flex-direction: column;
+    gap: var(--spacing-4);
+    min-height: auto;
+    padding: var(--spacing-4) 0;
   }
 
   .env-buttons-centered {
     display: flex;
-    gap: var(--spacing-6);
+    flex-direction: column;
+    gap: var(--spacing-4);
     justify-content: center;
     align-items: stretch;
+  }
+
+  @media (min-width: 600px) {
+    .env-buttons-centered {
+      flex-direction: row;
+      gap: var(--spacing-6);
+    }
   }
 
   .env-btn-large {
@@ -1490,14 +2765,22 @@ const trainingStyles = `
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: var(--spacing-6) var(--spacing-8);
-    min-width: 500px;
-    min-height: 400px;
+    padding: var(--spacing-6);
+    min-width: auto;
+    min-height: 150px;
     background: var(--color-bg-card);
     border: 2px solid var(--color-border);
     border-radius: var(--radius-xl);
     cursor: pointer;
     transition: all var(--transition-fast);
+  }
+
+  @media (min-width: 600px) {
+    .env-btn-large {
+      min-width: 200px;
+      min-height: 200px;
+      padding: var(--spacing-6) var(--spacing-8);
+    }
   }
 
   .env-btn-large:hover {
@@ -1751,6 +3034,35 @@ const trainingStyles = `
     font-size: var(--font-size-sm);
     color: var(--color-text-muted);
     margin-left: auto;
+  }
+
+  .region-btn-container {
+    position: relative;
+    display: flex;
+    gap: 0.5rem;
+    align-items: stretch;
+  }
+
+  .region-btn-container .region-btn {
+    flex: 1;
+  }
+
+  .btn-edit-exercises {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    font-size: 1.1rem;
+    transition: all var(--transition-fast);
+  }
+
+  .btn-edit-exercises:hover {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
   }
 
   /* Muscle Grid */
@@ -2540,6 +3852,105 @@ const trainingStyles = `
     opacity: 0.8;
   }
 
+  /* New styles for Specific Exercise Selection & Badges */
+  .plan-editor-modal .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .plan-editor-modal .btn-close {
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted);
+    font-size: 1.5rem;
+    cursor: pointer;
+    line-height: 1;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition-fast);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+  }
+
+  .plan-editor-modal .btn-close:hover {
+    background: var(--color-error-light);
+    color: var(--color-error);
+  }
+
+  .repeat-badge {
+    background: var(--color-bg-tertiary);
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    border: 1px solid var(--color-border);
+    margin-right: auto;
+    margin-left: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .exercise-selection-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 12px;
+  }
+
+  .exercise-select-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--color-bg-tertiary);
+    border: 1px solid transparent;
+  }
+
+  .exercise-select-item:hover {
+    background-color: var(--color-bg-hover);
+    border-color: var(--color-border);
+  }
+
+  .exercise-select-item.selected {
+    background-color: rgba(99, 102, 241, 0.1);
+    border-color: var(--color-accent);
+  }
+
+  .select-checkbox {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--color-text-secondary);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: white;
+    transition: all 0.2s;
+  }
+
+  .exercise-select-item.selected .select-checkbox {
+    border-color: var(--color-accent);
+    background-color: var(--color-accent);
+  }
+
+  .select-name {
+    font-size: 0.95rem;
+    color: var(--color-text-primary);
+  }
+
   /* ===== MOBILE RESPONSIVE STYLES ===== */
   @media (max-width: 768px) {
     .env-section {
@@ -2602,6 +4013,407 @@ const trainingStyles = `
 
     .env-btn-large {
       min-height: 150px;
+    }
+  }
+
+  /* ===== Weekly Plan Styles ===== */
+  .planned-workout-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-4);
+    padding: var(--spacing-4);
+    background: linear-gradient(135deg, var(--color-accent-dark) 0%, var(--color-accent) 100%);
+    border-radius: var(--radius-lg);
+    margin-bottom: var(--spacing-4);
+  }
+
+  .planned-workout-card.rest {
+    background: var(--color-bg-card);
+    border: 1px dashed var(--color-border);
+    justify-content: center;
+    gap: var(--spacing-2);
+  }
+
+  .planned-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-3);
+  }
+
+  .planned-icon {
+    font-size: 2rem;
+  }
+
+  .planned-info {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-1);
+  }
+
+  .planned-info strong {
+    font-size: var(--font-size-lg);
+    color: white;
+  }
+
+  .planned-meta {
+    font-size: var(--font-size-sm);
+    color: rgba(255, 255, 255, 0.8);
+  }
+
+  .planned-label {
+    color: var(--color-text-secondary);
+  }
+
+  .weekly-plan-section {
+    margin-bottom: var(--spacing-6);
+  }
+
+  .weekly-plan-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-3);
+  }
+
+  .section-title {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .weekly-plan-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: var(--spacing-2);
+  }
+
+  .plan-day {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-1);
+    padding: var(--spacing-3) var(--spacing-2);
+    background: var(--color-bg-card);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    border: 2px solid transparent;
+  }
+
+  .plan-day:hover {
+    background: var(--color-bg-tertiary);
+    transform: translateY(-2px);
+  }
+
+  .plan-day.today {
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg);
+  }
+
+  .plan-day.rest {
+    opacity: 0.7;
+  }
+
+  .day-label {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+  }
+
+  .day-icon {
+    font-size: 1.25rem;
+  }
+
+  .day-focus {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+    text-align: center;
+    line-height: 1.2;
+    min-height: 1.4em;
+  }
+
+  /* Plan Editor Modal */
+  .plan-editor-modal {
+    max-width: 500px;
+    width: 90vw;
+  }
+
+  .day-tabs {
+    display: flex;
+    gap: var(--spacing-1);
+    margin-bottom: var(--spacing-4);
+    overflow-x: auto;
+    padding-bottom: var(--spacing-2);
+  }
+
+  .day-tab {
+    flex: 1;
+    min-width: 40px;
+    padding: var(--spacing-2) var(--spacing-1);
+    background: var(--color-bg-tertiary);
+    border: none;
+    border-radius: var(--radius-md);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    position: relative;
+  }
+
+  .day-tab:hover {
+    background: var(--color-bg-card);
+  }
+
+  .day-tab.active {
+    background: var(--color-accent);
+    color: white;
+  }
+
+  .day-tab.has-plan::after {
+    content: '';
+    position: absolute;
+    bottom: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 4px;
+    height: 4px;
+    background: var(--color-success);
+    border-radius: 50%;
+  }
+
+  .day-tab.active.has-plan::after {
+    background: white;
+  }
+
+  .region-tab {
+    flex: 1;
+    padding: 0.5rem;
+    background: rgba(30, 41, 59, 0.8);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-radius: var(--radius-md);
+    color: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-transform: capitalize;
+  }
+
+  .region-tab:hover {
+    background: rgba(52, 211, 153, 0.15);
+    border-color: rgba(52, 211, 153, 0.5);
+    color: #34d399;
+    transform: translateY(-1px);
+  }
+
+  .region-tab.active {
+    border-color: #34d399;
+    background: rgba(52, 211, 153, 0.2);
+    color: #34d399;
+  }
+
+  .type-buttons {
+    display: flex;
+    gap: var(--spacing-2);
+  }
+
+  .type-btn {
+    flex: 1;
+    padding: var(--spacing-3);
+    background: rgba(30, 41, 59, 0.8);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-base);
+    color: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-align: center;
+  }
+
+  .type-btn:hover {
+    background: rgba(52, 211, 153, 0.15);
+    border-color: rgba(52, 211, 153, 0.5);
+    color: #34d399;
+    transform: translateY(-2px);
+  }
+
+  .type-btn.active {
+    border-color: #34d399;
+    background: rgba(52, 211, 153, 0.2);
+    color: #34d399;
+  }
+
+  .env-buttons-small {
+    display: flex;
+    gap: var(--spacing-2);
+  }
+
+  .env-btn-small {
+    flex: 1;
+    padding: var(--spacing-2) var(--spacing-3);
+    background: rgba(30, 41, 59, 0.8);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-sm);
+    color: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .env-btn-small:hover {
+    background: rgba(52, 211, 153, 0.15);
+    border-color: rgba(52, 211, 153, 0.5);
+    color: #34d399;
+    transform: translateY(-1px);
+  }
+
+  .env-btn-small.active {
+    border-color: #34d399;
+    background: rgba(52, 211, 153, 0.2);
+    color: #34d399;
+  }
+
+  .plan-editor-modal .muscle-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--spacing-2);
+  }
+
+  .muscle-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-1);
+    padding: var(--spacing-3) var(--spacing-2);
+    background: rgba(30, 41, 59, 0.8);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .muscle-btn:hover {
+    background: rgba(52, 211, 153, 0.15);
+    border-color: rgba(52, 211, 153, 0.5);
+    transform: translateY(-2px);
+  }
+
+  .muscle-btn:hover .muscle-name {
+    color: #34d399;
+  }
+
+  .muscle-btn.active {
+    border-color: #34d399;
+    background: rgba(52, 211, 153, 0.2);
+  }
+
+  .muscle-btn.active .muscle-name {
+    color: #34d399;
+  }
+
+  .muscle-icon {
+    font-size: 1.5rem;
+  }
+
+  .muscle-name {
+    font-size: var(--font-size-xs);
+    color: rgba(255, 255, 255, 0.75);
+    transition: color 0.2s ease;
+  }
+
+  .exercise-selection-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .exercise-select-btn {
+    padding: 0.75rem;
+    text-align: left;
+    background: rgba(30, 41, 59, 0.8);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .exercise-select-btn:hover {
+    background: rgba(52, 211, 153, 0.15);
+    border-color: rgba(52, 211, 153, 0.5);
+    transform: translateY(-1px);
+  }
+
+  .exercise-select-btn .exercise-name {
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.95);
+    margin-bottom: 2px;
+  }
+
+  .exercise-select-btn:hover .exercise-name {
+    color: #34d399;
+  }
+
+  .exercise-config-form {
+    background: var(--surface-color);
+  }
+
+  .config-grid .form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+  }
+
+  .config-grid .form-control {
+    width: 100%;
+    padding: 0.75rem;
+    background: rgba(30, 41, 59, 1);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: white;
+    font-size: 1rem;
+  }
+
+  .config-grid .form-control:focus {
+    border-color: var(--primary-color);
+    outline: none;
+  }
+
+  .modal-footer .footer-right {
+    display: flex;
+    gap: var(--spacing-2);
+  }
+
+  .modal-footer {
+    display: flex;
+    justify-content: space-between;
+  }
+
+  @media (max-width: 480px) {
+    .weekly-plan-grid {
+      grid-template-columns: repeat(7, 1fr);
+      gap: var(--spacing-1);
+    }
+
+    .plan-day {
+      padding: var(--spacing-2) var(--spacing-1);
+    }
+
+    .day-icon {
+      font-size: 1rem;
+    }
+
+    .day-focus {
+      display: none;
+    }
+
+    .plan-editor-modal .muscle-grid {
+      grid-template-columns: repeat(2, 1fr);
     }
   }
 `;

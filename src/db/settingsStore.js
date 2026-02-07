@@ -25,6 +25,9 @@ export const DEFAULT_SETTINGS = {
         nightReview: '22:00',
     },
 
+    // Auto Sync
+    autoSync: false,
+
     // User Profile (for macro calculations)
     profile: {
         bodyWeight: 70, // kg
@@ -48,6 +51,29 @@ export const DEFAULT_SETTINGS = {
         currentReps: 10,
         targetReps: 15,
         lastUpdated: null,
+    },
+
+    // Custom Quick Add Items (for Meals page)
+    // Users can add/remove items from the quick protein buttons
+    customQuickItems: [], // Array of custom food items with {id, name, icon, protein, calories, carbs, fats}
+
+    // Weekly Training Plan
+    // Users can customize exercises for each day
+    // Each day can have multiple exercises from different body regions
+    trainingPlan: {
+        enabled: false, // Start disabled until user sets up their plan
+        defaultRestBetweenExercises: 120, // 2 minutes in seconds
+        weeklySchedule: {
+            // Each day contains an array of exercises
+            // Example: [{ name: 'Bench Press', exerciseType: 'strength', sets: 4, targetReps: 10, weight: 60 }, ...]
+            monday: [],
+            tuesday: [],
+            wednesday: [],
+            thursday: [],
+            friday: [],
+            saturday: [],
+            sunday: [],
+        }
     },
 };
 
@@ -235,7 +261,7 @@ export async function sendNotification(title, body, options = {}) {
  */
 export async function scheduleReminder(type, time, message) {
     // For now, just log - full implementation would use service worker
-    console.log('[Settings] Would schedule reminder:', { type, time, message });
+    // console.log('[Settings] Would schedule reminder:', { type, time, message });
 
     // Store in settings for service worker to pick up
     const settings = await getSettings();

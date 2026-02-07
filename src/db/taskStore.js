@@ -153,6 +153,32 @@ export async function completeTask(taskId) {
 }
 
 /**
+ * Uncomplete a task (toggle back to pending)
+ */
+export async function uncompleteTask(taskId) {
+    const task = await getTask(taskId);
+    if (!task) {
+        throw new Error('Task not found');
+    }
+
+    // Check if day is locked (closed or inactive) - preserve immutable history
+    const { getDay, DAY_STATUS } = await import('./dayStore.js');
+    const day = await getDay(task.date);
+    if (day && (day.status === DAY_STATUS.CLOSED || day.status === DAY_STATUS.INACTIVE)) {
+        throw new Error('Cannot modify tasks on closed or inactive days');
+    }
+
+    if (task.status !== TASK_STATUS.COMPLETED) {
+        throw new Error('Only completed tasks can be uncompleted');
+    }
+
+    task.status = TASK_STATUS.PENDING;
+    task.completedAt = null;
+
+    return saveTask(task);
+}
+
+/**
  * Skip a task (requires reason)
  */
 export async function skipTask(taskId, reason) {

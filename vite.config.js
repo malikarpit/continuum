@@ -1,12 +1,14 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import viteCompression from 'vite-plugin-compression';
 
 // https://vite.dev/config/
 export default defineConfig({
   base: '/continuum/',  // GitHub Pages base path
   plugins: [
     react(),
+    viteCompression(), // Gzip compression
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icons/*.png'],
@@ -55,6 +57,31 @@ export default defineConfig({
                 statuses: [0, 200]
               }
             }
+          },
+          {
+            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'gstatic-fonts-cache',
+              expiration: {
+                maxEntries: 10,
+                maxAgeSeconds: 60 * 60 * 24 * 365 // 1 year
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
+              }
+            }
+          },
+          {
+            urlPattern: ({ request }) => request.destination === 'image',
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'images-cache',
+              expiration: {
+                maxEntries: 50,
+                maxAgeSeconds: 30 * 24 * 60 * 60, // 30 Days
+              },
+            },
           }
         ]
       }

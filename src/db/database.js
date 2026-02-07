@@ -30,7 +30,7 @@ export const STORES = {
 export async function initDatabase() {
     const db = await openDB(DB_NAME, DB_VERSION, {
         upgrade(db, oldVersion, newVersion, transaction) {
-            console.log(`Upgrading database from version ${oldVersion} to ${newVersion}`);
+            // console.log(`Upgrading database from version ${oldVersion} to ${newVersion}`);
 
             // Days store - keyed by date string (YYYY-MM-DD)
             if (!db.objectStoreNames.contains(STORES.DAYS)) {
@@ -99,7 +99,7 @@ export async function initDatabase() {
 
             // Version 2 migrations: Add indexes for scheduled tasks
             if (oldVersion < 2) {
-                console.log('Running v2 migrations...');
+                // console.log('Running v2 migrations...');
                 // Add scheduledFor index to tasks if upgrading
                 if (db.objectStoreNames.contains(STORES.TASKS)) {
                     const tasksStore = transaction.objectStore(STORES.TASKS);
@@ -188,6 +188,7 @@ export async function withTransaction(storeNames, mode, callback) {
 
 /**
  * Export entire database as JSON
+ * Includes localStorage preferences for complete state
  */
 export async function exportDatabase() {
     const db = await getDB();
@@ -195,11 +196,31 @@ export async function exportDatabase() {
         version: DB_VERSION,
         exportedAt: new Date().toISOString(),
         data: {},
+        preferences: {}, // Store localStorage items
     };
 
+    // Export IndexedDB stores
     for (const storeName of Object.values(STORES)) {
         exportData.data[storeName] = await db.getAll(storeName);
     }
+
+    // Export relevant localStorage items
+    const PREF_KEYS = [
+        'continuum_sync_tasks',
+        'continuum_sync_calendar',
+        'continuum_last_sync_tasks',
+        'continuum_last_sync_calendar',
+        'continuum_google_calendar_sync',
+        'continuum_onboarding_completed',
+        'continuum_theme',
+    ];
+
+    PREF_KEYS.forEach(key => {
+        const value = localStorage.getItem(key);
+        if (value !== null) {
+            exportData.preferences[key] = value;
+        }
+    });
 
     return exportData;
 }
@@ -237,23 +258,44 @@ export async function importDatabase(exportData) {
 
     const db = await getDB();
 
-    // Clear existing data and import validated data
+    // MERGE STRATEGY: Update existing data, add new data, keep non-conflicting local data
+    // We do NOT clear the stores. This ensures we don't lose data that isn't in the backup.
+    // If an ID exists in both, the IMPORTED version wins (overwrite).
+
     for (const [storeName, items] of Object.entries(exportData.data)) {
         if (validStores.includes(storeName)) {
             const tx = db.transaction(storeName, 'readwrite');
-            await tx.objectStore(storeName).clear();
+            const store = tx.objectStore(storeName);
+
+            let successCount = 0;
+            let errorCount = 0;
+
             for (const item of items) {
                 // Basic validation: items should be objects
                 if (item && typeof item === 'object') {
-                    await tx.objectStore(storeName).put(item);
+                    try {
+                        await store.put(item);
+                        successCount++;
+                    } catch (e) {
+                        console.error(`Failed to put item in ${storeName}:`, item, e);
+                        errorCount++;
+                    }
                 } else {
                     console.warn(`Skipping invalid item in store ${storeName}:`, item);
                 }
             }
             await tx.done;
+            // console.log(`Store ${storeName}: Imported ${successCount} items, ${errorCount} errors.`);
         }
     }
 
-    console.log(`Database imported successfully. Skipped ${unknownStores.length} unknown stores.`);
+    // Restore preferences if present
+    if (exportData.preferences) {
+        Object.entries(exportData.preferences).forEach(([key, value]) => {
+            localStorage.setItem(key, value);
+        });
+    }
+
+    // console.log(`Database import completed. Skipped ${unknownStores.length} unknown stores.`);
     return true;
 }

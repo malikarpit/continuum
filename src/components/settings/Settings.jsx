@@ -6,18 +6,27 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useAppStore } from '../../store/appStore';
 import { ACTION_LABELS, ACTION_ICONS, formatActionTime, canUndo, clearActionHistory } from '../../db/actionHistory';
+import { getBackgroundSettings, setCustomBackground, resetToDefaultBackground, updateBackgroundEffects, BACKGROUND_TYPES } from '../../db/backgroundStore';
+import { googleAuth } from '../../services/GoogleAuthService';
+import { googleTasksService } from '../../services/GoogleTasksService';
+import { googleCalendarService } from '../../services/GoogleCalendarService';
+import { getTasksByDate, saveTask } from '../../db/taskStore';
+import { getDateString } from '../../db/dayStore';
+import { getTrainingByDate } from '../../db/trainingStore';
 
 // Default widget layout configuration (for 10-column grid)
 const DEFAULT_LAYOUT = [
     { id: 'actions', title: '🔄 Recent Actions', x: 0, y: 0, w: 4, h: 3, minW: 2, minH: 2 },
     { id: 'nutrition', title: '🥗 Nutrition Goals', x: 4, y: 0, w: 3, h: 3, minW: 2, minH: 2 },
     { id: 'training', title: '🏋️ Training Setup', x: 7, y: 0, w: 3, h: 3, minW: 2, minH: 2 },
-    { id: 'dayBoundary', title: '🌅 Day Boundary', x: 0, y: 3, w: 3, h: 2, minW: 2, minH: 2 },
-    { id: 'notifications', title: '🔔 Notifications', x: 3, y: 3, w: 3, h: 2, minW: 2, minH: 2 },
-    { id: 'data', title: '💾 Data Management', x: 6, y: 3, w: 2, h: 2, minW: 2, minH: 2 },
-    { id: 'day', title: '📅 Day Management', x: 8, y: 3, w: 2, h: 2, minW: 2, minH: 2 },
-    { id: 'about', title: '📱 About', x: 0, y: 5, w: 2, h: 2, minW: 2, minH: 2 },
-    { id: 'install', title: '📲 Install App', x: 2, y: 5, w: 3, h: 2, minW: 2, minH: 2 },
+    { id: 'dayBoundary', title: '🌅 Day Boundary', x: 0, y: 3, w: 3, h: 3, minW: 2, minH: 2 },
+    { id: 'notifications', title: '🔔 Notifications', x: 3, y: 3, w: 3, h: 3, minW: 2, minH: 2 },
+    { id: 'background', title: '🖼️ Background', x: 6, y: 3, w: 4, h: 3, minW: 2, minH: 2 },
+    { id: 'google', title: '🔑 Google Integration', x: 0, y: 6, w: 5, h: 2, minW: 2, minH: 2 },
+    { id: 'data', title: '💾 Data Management', x: 5, y: 6, w: 2, h: 2, minW: 2, minH: 2 },
+    { id: 'day', title: '📅 Day Management', x: 7, y: 6, w: 3, h: 2, minW: 2, minH: 2 },
+    { id: 'about', title: '📱 About', x: 0, y: 8, w: 2, h: 2, minW: 2, minH: 2 },
+    { id: 'install', title: '📲 Install App', x: 2, y: 8, w: 3, h: 2, minW: 2, minH: 2 },
 ];
 
 const GRID_COLS = 10;
@@ -52,7 +61,6 @@ export default function Settings() {
     const [calorieTarget, setCalorieTarget] = useState(settings.calorieTarget);
     const [equipment, setEquipment] = useState(settings.primaryEquipment || 'gym');
     const [dayBoundaryHour, setDayBoundaryHour] = useState(settings.dayBoundaryHour || 4);
-    const [notificationsEnabled, setNotificationsEnabled] = useState(settings.notificationsEnabled || false);
     const containerRef = useRef(null);
     const fileInputRef = useRef(null);
 
@@ -205,7 +213,8 @@ export default function Settings() {
                 await importData(file);
                 showToast('Data imported successfully!', 'success');
             } catch (error) {
-                showToast('Failed to import data', 'error');
+                console.error('Import error:', error);
+                showToast(error.message || 'Failed to import data', 'error');
             }
         }
     };
@@ -386,36 +395,472 @@ export default function Settings() {
                 );
 
             case 'notifications':
+                const notifSettings = settings.notifications || {};
                 return (
-                    <div className="widget-form">
+                    <div className="widget-form notification-widget">
+                        {/* Master Toggle */}
                         <div className="form-group">
                             <label className="toggle-label">
-                                <span>Enable Notifications</span>
+                                <span>🔔 Enable Notifications</span>
                                 <input
                                     type="checkbox"
-                                    checked={notificationsEnabled}
+                                    checked={notifSettings.enabled || false}
                                     onChange={async (e) => {
-                                        const enabled = e.target.checked;
-                                        if (enabled && 'Notification' in window) {
-                                            const permission = await Notification.requestPermission();
-                                            if (permission === 'granted') {
-                                                setNotificationsEnabled(true);
-                                                updateSettings({ notificationsEnabled: true });
-                                                showToast('Notifications enabled!', 'success');
-                                            } else {
-                                                showToast('Permission denied', 'warning');
-                                            }
+                                        if (e.target.checked) {
+                                            await useAppStore.getState().enableNotifications();
                                         } else {
-                                            setNotificationsEnabled(false);
-                                            updateSettings({ notificationsEnabled: false });
+                                            await useAppStore.getState().disableNotifications();
                                         }
                                     }}
                                 />
                             </label>
                         </div>
-                        <p className="text-secondary text-xs">
-                            Get reminders for meals, workouts, and day review
-                        </p>
+
+                        {notifSettings.enabled && (
+                            <>
+                                {/* Category Toggles */}
+                                <div className="notification-categories">
+                                    <label className="toggle-label small">
+                                        <span>📋 Task Reminders</span>
+                                        <input
+                                            type="checkbox"
+                                            checked={notifSettings.taskReminders !== false}
+                                            onChange={(e) => useAppStore.getState().updateNotificationSettings({ taskReminders: e.target.checked })}
+                                        />
+                                    </label>
+                                    <label className="toggle-label small">
+                                        <span>🍽️ Meal Reminders</span>
+                                        <input
+                                            type="checkbox"
+                                            checked={notifSettings.mealReminders !== false}
+                                            onChange={(e) => useAppStore.getState().updateNotificationSettings({ mealReminders: e.target.checked })}
+                                        />
+                                    </label>
+                                    <label className="toggle-label small">
+                                        <span>💪 Training Reminders</span>
+                                        <input
+                                            type="checkbox"
+                                            checked={notifSettings.trainingReminders !== false}
+                                            onChange={(e) => useAppStore.getState().updateNotificationSettings({ trainingReminders: e.target.checked })}
+                                        />
+                                    </label>
+                                </div>
+
+                                {/* Quiet Hours */}
+                                <div className="form-group quiet-hours">
+                                    <label>🌙 Quiet Hours</label>
+                                    <div className="time-range">
+                                        <input
+                                            type="time"
+                                            className="input input-sm"
+                                            value={notifSettings.quietHoursStart || '22:00'}
+                                            onChange={(e) => useAppStore.getState().updateNotificationSettings({ quietHoursStart: e.target.value })}
+                                        />
+                                        <span>to</span>
+                                        <input
+                                            type="time"
+                                            className="input input-sm"
+                                            value={notifSettings.quietHoursEnd || '07:00'}
+                                            onChange={(e) => useAppStore.getState().updateNotificationSettings({ quietHoursEnd: e.target.value })}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Sound Toggle */}
+                                <label className="toggle-label small">
+                                    <span>🔊 Play Sound</span>
+                                    <input
+                                        type="checkbox"
+                                        checked={notifSettings.soundEnabled !== false}
+                                        onChange={(e) => useAppStore.getState().updateNotificationSettings({ soundEnabled: e.target.checked })}
+                                    />
+                                </label>
+
+                                {/* Test Button */}
+                                <button
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => useAppStore.getState().testNotification()}
+                                >
+                                    🧪 Test Notification
+                                </button>
+                            </>
+                        )}
+
+                        {!notifSettings.enabled && (
+                            <p className="text-secondary text-xs">
+                                Get reminders 30 min before deadlines, meal times, and workouts
+                            </p>
+                        )}
+                    </div>
+                );
+
+            case 'background':
+                const bgInputRef = useRef(null);
+                const [bgSettings, setBgSettings] = useState(null);
+                const [bgLoading, setBgLoading] = useState(false);
+
+                // Load background settings on mount
+                useEffect(() => {
+                    getBackgroundSettings().then(setBgSettings);
+                }, []);
+
+                const handleBgUpload = async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+
+                    setBgLoading(true);
+                    try {
+                        const newSettings = await setCustomBackground(file);
+                        setBgSettings(newSettings);
+                        window.dispatchEvent(new Event('backgroundSettingsUpdated'));
+                        showToast('Background updated!', 'success');
+                    } catch (error) {
+                        showToast(error.message || 'Failed to set background', 'error');
+                    } finally {
+                        setBgLoading(false);
+                    }
+                };
+
+                const handleBgReset = async () => {
+                    const newSettings = await resetToDefaultBackground();
+                    setBgSettings(newSettings);
+                    window.dispatchEvent(new Event('backgroundSettingsUpdated'));
+                    showToast('Background reset to default', 'success');
+                };
+
+                const handleBgEffects = async (updates) => {
+                    const newSettings = await updateBackgroundEffects(updates);
+                    setBgSettings(newSettings);
+                    window.dispatchEvent(new Event('backgroundSettingsUpdated'));
+                };
+
+                return (
+                    <div className="widget-form background-widget">
+                        {/* Upload Button */}
+                        <div className="bg-upload-section">
+                            <button
+                                className={`btn btn-secondary btn-sm ${bgLoading ? 'loading' : ''}`}
+                                onClick={() => bgInputRef.current?.click()}
+                                disabled={bgLoading}
+                            >
+                                {bgLoading ? '⏳ Processing...' : '📤 Upload Image/GIF/Video'}
+                            </button>
+                            <input
+                                ref={bgInputRef}
+                                type="file"
+                                accept="image/*,video/mp4,video/webm"
+                                style={{ display: 'none' }}
+                                onChange={handleBgUpload}
+                            />
+                        </div>
+
+                        {/* Preview Thumbnail */}
+                        {bgSettings?.type && bgSettings.type !== BACKGROUND_TYPES.DEFAULT && (
+                            <div className="bg-preview">
+                                <div
+                                    className="bg-thumbnail"
+                                    style={{
+                                        backgroundImage: bgSettings.type !== BACKGROUND_TYPES.VIDEO
+                                            ? `url(${bgSettings.imageData})`
+                                            : undefined
+                                    }}
+                                >
+                                    {bgSettings.type === BACKGROUND_TYPES.VIDEO && (
+                                        <video src={bgSettings.imageData} muted loop autoPlay playsInline />
+                                    )}
+                                </div>
+                                <span className="text-xs text-secondary">{bgSettings.fileName}</span>
+                            </div>
+                        )}
+
+                        {/* Effects Controls */}
+                        {bgSettings?.type && bgSettings.type !== BACKGROUND_TYPES.DEFAULT && (
+                            <div className="bg-effects">
+                                <div className="form-group">
+                                    <label className="text-xs">Overlay Darkness: {Math.round((bgSettings.overlayOpacity || 0.3) * 100)}%</label>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="80"
+                                        value={(bgSettings.overlayOpacity || 0.3) * 100}
+                                        onChange={(e) => handleBgEffects({ overlayOpacity: parseInt(e.target.value) / 100 })}
+                                        className="slider"
+                                    />
+                                </div>
+                                <div className="form-group">
+                                    <label className="text-xs">Brightness: {bgSettings.brightness || 100}%</label>
+                                    <input
+                                        type="range"
+                                        min="30"
+                                        max="150"
+                                        value={bgSettings.brightness || 100}
+                                        onChange={(e) => handleBgEffects({ brightness: parseInt(e.target.value) })}
+                                        className="slider"
+                                    />
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Reset Button */}
+                        {bgSettings?.type && bgSettings.type !== BACKGROUND_TYPES.DEFAULT && (
+                            <button className="btn btn-ghost btn-sm" onClick={handleBgReset}>
+                                ↺ Reset to Starry Default
+                            </button>
+                        )}
+
+                        {(!bgSettings?.type || bgSettings.type === BACKGROUND_TYPES.DEFAULT) && (
+                            <p className="text-secondary text-xs">
+                                Upload a custom image, GIF, or video as your app background (max 3MB)
+                            </p>
+                        )}
+                    </div>
+                );
+
+            case 'google':
+                const [googleUser, setGoogleUser] = useState(null);
+                const [googleLoading, setGoogleLoading] = useState(false);
+                const [syncEnabled, setSyncEnabled] = useState({
+                    tasks: localStorage.getItem('continuum_sync_tasks') === 'true',
+                    calendar: localStorage.getItem('continuum_sync_calendar') === 'true',
+                });
+                const [lastSync, setLastSync] = useState({
+                    tasks: localStorage.getItem('continuum_last_sync_tasks') || null,
+                    calendar: localStorage.getItem('continuum_last_sync_calendar') || null,
+                });
+
+                // Helper to update lastSync and persist to localStorage
+                const updateLastSync = (type, time) => {
+                    const isoTime = time || new Date().toISOString();
+                    setLastSync(prev => ({ ...prev, [type]: isoTime }));
+                    localStorage.setItem(`continuum_last_sync_${type}`, isoTime);
+                };
+
+                // Check auth status on mount - need to init first to restore session
+                useEffect(() => {
+                    const initAuth = async () => {
+                        try {
+                            await googleAuth.init();
+                            // Check if we have a valid session
+                            if (googleAuth.isAuthenticated()) {
+                                setGoogleUser(googleAuth.getUser());
+                            } else {
+                                // Check if we have stored user info (session might be refreshing)
+                                const storedUser = localStorage.getItem('continuum_google_user');
+                                if (storedUser) {
+                                    setGoogleUser(JSON.parse(storedUser));
+                                }
+                            }
+                        } catch (e) {
+                            console.log('Auth init error:', e);
+                        }
+                    };
+                    initAuth();
+                }, []);
+
+                const handleGoogleLogin = async () => {
+                    setGoogleLoading(true);
+                    try {
+                        // Initialize Google auth (uses preconfigured client ID)
+                        await googleAuth.init();
+
+                        // Check if Google Sign-In is available
+                        if (!googleAuth.isAvailable()) {
+                            showToast('Google Sign-In is not configured yet. Contact the app administrator.', 'warning');
+                            setGoogleLoading(false);
+                            return;
+                        }
+
+                        // Login - shows native Google sign-in popup
+                        const user = await googleAuth.login();
+                        setGoogleUser(user);
+                        showToast(`Welcome, ${user.name || user.email}!`, 'success');
+                    } catch (error) {
+                        console.error('Google login error:', error);
+                        showToast(error.message || 'Failed to sign in with Google', 'error');
+                    } finally {
+                        setGoogleLoading(false);
+                    }
+                };
+
+                const handleGoogleLogout = () => {
+                    googleAuth.logout();
+                    setGoogleUser(null);
+                    showToast('Signed out from Google', 'info');
+                };
+
+                const toggleSync = (type) => {
+                    const newValue = !syncEnabled[type];
+                    setSyncEnabled({ ...syncEnabled, [type]: newValue });
+                    localStorage.setItem(`continuum_sync_${type}`, newValue.toString());
+                };
+
+                const handleManualSync = async () => {
+                    if (!googleAuth.isAuthenticated()) {
+                        showToast('Please sign in to Google first', 'warning');
+                        return;
+                    }
+
+                    setGoogleLoading(true);
+                    try {
+                        // Get today's date and tasks for both sync operations
+                        const today = getDateString(new Date());
+                        const localTasks = syncEnabled.tasks ? await getTasksByDate(today) : [];
+
+                        if (syncEnabled.tasks) {
+
+                            // Sync with Google Tasks
+                            const results = await googleTasksService.syncTasks(
+                                localTasks,
+                                async (taskId, updates) => {
+                                    if (taskId && updates.googleTaskId) {
+                                        // Get the task and update it with Google ID
+                                        const task = localTasks.find(t => t.id === taskId);
+                                        if (task) {
+                                            await saveTask({ ...task, ...updates });
+                                        }
+                                    }
+                                }
+                            );
+
+                            showToast(`Synced ${results.created + results.updated} tasks with Google`, 'success');
+                            updateLastSync('tasks');
+                        }
+                        if (syncEnabled.calendar) {
+                            await googleCalendarService.init();
+                            let calendarEvents = 0;
+
+                            // Sync training session for today
+                            const trainingSession = await getTrainingByDate(today);
+                            if (trainingSession && trainingSession.exercises?.length > 0) {
+                                try {
+                                    await googleCalendarService.createTrainingEvent(
+                                        trainingSession.exercises,
+                                        new Date()
+                                    );
+                                    calendarEvents++;
+                                } catch (e) {
+                                    console.log('Training event may already exist:', e.message);
+                                }
+                            }
+
+                            // Sync tasks with due dates to calendar
+                            for (const task of localTasks) {
+                                if (task.dueDate && !task.googleCalendarEventId) {
+                                    try {
+                                        const event = await googleCalendarService.createTaskDeadlineEvent(task);
+                                        await saveTask({ ...task, googleCalendarEventId: event.id });
+                                        calendarEvents++;
+                                    } catch (e) {
+                                        console.log('Task event error:', e.message);
+                                    }
+                                }
+                            }
+
+                            showToast(`Added ${calendarEvents} events to Google Calendar`, 'success');
+                            updateLastSync('calendar');
+                        }
+                    } catch (error) {
+                        console.error('Sync error:', error);
+                        showToast(error.message || 'Sync failed', 'error');
+                    } finally {
+                        setGoogleLoading(false);
+                    }
+                };
+
+                const formatSyncTime = (time) => {
+                    if (!time) return 'Never';
+                    const date = new Date(time);
+                    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                };
+
+                return (
+                    <div className="widget-form google-widget">
+                        {!googleUser ? (
+                            <>
+                                <p className="text-secondary text-sm mb-3">
+                                    Connect to sync tasks and calendar events with Google
+                                </p>
+                                <button
+                                    className={`btn btn-primary ${googleLoading ? 'loading' : ''}`}
+                                    onClick={handleGoogleLogin}
+                                    disabled={googleLoading}
+                                >
+                                    {googleLoading ? '⏳ Connecting...' : '🔑 Sign in with Google'}
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                {/* User Info */}
+                                <div className="google-user-info">
+                                    {googleUser.picture && (
+                                        <img src={googleUser.picture} alt="" className="google-avatar" />
+                                    )}
+                                    <div>
+                                        <div className="text-sm font-semibold">{googleUser.name}</div>
+                                        <div className="text-xs text-secondary">{googleUser.email}</div>
+                                    </div>
+                                </div>
+
+                                {/* Sync Options */}
+                                <div className="sync-options">
+                                    <label className="toggle-label small" style={{ marginBottom: '12px', paddingBottom: '12px', borderBottom: '1px solid var(--color-border)' }}>
+                                        <span style={{ display: 'flex', flexDirection: 'column' }}>
+                                            <span>🔄 Auto-Sync</span>
+                                            <span className="text-secondary text-xs" style={{ fontWeight: 'normal', opacity: 0.8 }}>Sync automatically</span>
+                                        </span>
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.autoSync || false}
+                                            onChange={(e) => {
+                                                updateSettings({ autoSync: e.target.checked });
+                                                if (e.target.checked) showToast('Auto-sync enabled', 'success');
+                                            }}
+                                        />
+                                    </label>
+
+                                    <label className="toggle-label small">
+                                        <span>📋 Sync Tasks</span>
+                                        <input
+                                            type="checkbox"
+                                            checked={syncEnabled.tasks}
+                                            onChange={() => toggleSync('tasks')}
+                                        />
+                                    </label>
+                                    {syncEnabled.tasks && (
+                                        <span className="sync-time">Last: {formatSyncTime(lastSync.tasks)}</span>
+                                    )}
+
+                                    <label className="toggle-label small">
+                                        <span>📅 Sync Calendar</span>
+                                        <input
+                                            type="checkbox"
+                                            checked={syncEnabled.calendar}
+                                            onChange={() => toggleSync('calendar')}
+                                        />
+                                    </label>
+                                    {syncEnabled.calendar && (
+                                        <span className="sync-time">Last: {formatSyncTime(lastSync.calendar)}</span>
+                                    )}
+                                </div>
+
+                                {/* Actions */}
+                                <div className="google-actions">
+                                    <button
+                                        className={`btn btn-secondary btn-sm ${googleLoading ? 'loading' : ''}`}
+                                        onClick={handleManualSync}
+                                        disabled={googleLoading || (!syncEnabled.tasks && !syncEnabled.calendar)}
+                                    >
+                                        🔄 Sync Now
+                                    </button>
+                                    <button
+                                        className="btn btn-ghost btn-sm"
+                                        onClick={handleGoogleLogout}
+                                    >
+                                        Sign Out
+                                    </button>
+                                </div>
+                            </>
+                        )}
                     </div>
                 );
 
@@ -815,5 +1260,215 @@ const settingsStyles = `
         .header-actions .btn:first-child {
             display: none;
         }
+    }
+
+    /* Notification Widget Styles */
+    .notification-widget {
+        max-height: 100%;
+        overflow-y: auto;
+    }
+
+    .toggle-label {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: var(--spacing-3);
+        cursor: pointer;
+    }
+
+    .toggle-label input[type="checkbox"] {
+        width: 40px;
+        height: 22px;
+        appearance: none;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 11px;
+        position: relative;
+        cursor: pointer;
+        transition: background 0.3s;
+    }
+
+    .toggle-label input[type="checkbox"]:checked {
+        background: var(--color-accent);
+    }
+
+    .toggle-label input[type="checkbox"]::before {
+        content: '';
+        position: absolute;
+        width: 18px;
+        height: 18px;
+        background: white;
+        border-radius: 50%;
+        top: 2px;
+        left: 2px;
+        transition: transform 0.3s;
+    }
+
+    .toggle-label input[type="checkbox"]:checked::before {
+        transform: translateX(18px);
+    }
+
+    .toggle-label.small {
+        font-size: var(--font-size-sm);
+        padding: var(--spacing-2) 0;
+    }
+
+    .toggle-label.small input[type="checkbox"] {
+        width: 32px;
+        height: 18px;
+    }
+
+    .toggle-label.small input[type="checkbox"]::before {
+        width: 14px;
+        height: 14px;
+    }
+
+    .toggle-label.small input[type="checkbox"]:checked::before {
+        transform: translateX(14px);
+    }
+
+    .notification-categories {
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-1);
+        padding: var(--spacing-2);
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: var(--radius-md);
+        margin-bottom: var(--spacing-2);
+    }
+
+    .quiet-hours .time-range {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-2);
+        margin-top: var(--spacing-1);
+    }
+
+    .quiet-hours .time-range input[type="time"] {
+        flex: 1;
+        max-width: 100px;
+    }
+
+    .quiet-hours .time-range span {
+        color: var(--color-text-muted);
+        font-size: var(--font-size-sm);
+    }
+
+    /* Background Widget Styles */
+    .background-widget {
+        overflow-y: auto;
+    }
+
+    .bg-upload-section {
+        margin-bottom: var(--spacing-3);
+    }
+
+    .bg-preview {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-2);
+        margin-bottom: var(--spacing-3);
+    }
+
+    .bg-thumbnail {
+        width: 60px;
+        height: 40px;
+        border-radius: var(--radius-sm);
+        background-size: cover;
+        background-position: center;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        overflow: hidden;
+    }
+
+    .bg-thumbnail video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .bg-effects {
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-2);
+        margin-bottom: var(--spacing-3);
+    }
+
+    .slider {
+        width: 100%;
+        height: 6px;
+        appearance: none;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 3px;
+        outline: none;
+        cursor: pointer;
+    }
+
+    .slider::-webkit-slider-thumb {
+        appearance: none;
+        width: 16px;
+        height: 16px;
+        background: var(--color-accent);
+        border-radius: 50%;
+        cursor: pointer;
+        transition: transform 0.2s;
+    }
+
+    .slider::-webkit-slider-thumb:hover {
+        transform: scale(1.2);
+    }
+
+    .slider::-moz-range-thumb {
+        width: 16px;
+        height: 16px;
+        background: var(--color-accent);
+        border-radius: 50%;
+        border: none;
+        cursor: pointer;
+    }
+
+    /* Google Widget Styles */
+    .google-widget {
+        overflow-y: auto;
+    }
+
+    .google-user-info {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-3);
+        padding: var(--spacing-2);
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: var(--radius-md);
+        margin-bottom: var(--spacing-3);
+    }
+
+    .google-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        object-fit: cover;
+    }
+
+    .sync-options {
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-2);
+        margin-bottom: var(--spacing-3);
+    }
+
+    .sync-time {
+        font-size: var(--font-size-xs);
+        color: var(--color-text-muted);
+        margin-left: auto;
+        padding-left: var(--spacing-3);
+    }
+
+    .google-actions {
+        display: flex;
+        gap: var(--spacing-2);
+        flex-wrap: wrap;
+    }
+
+    .btn.loading {
+        opacity: 0.7;
+        pointer-events: none;
     }
 `;

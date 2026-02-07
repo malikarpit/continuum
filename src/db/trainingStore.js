@@ -58,22 +58,82 @@ export const TRAINING_SKIP_REASONS = [
 ];
 
 /**
+ * Exercise Types - determines which input fields to show
+ */
+export const EXERCISE_TYPE = {
+    STRENGTH: 'strength',     // Weight, sets, reps
+    CARDIO: 'cardio',         // Time, speed, distance, elevation
+    ISOMETRIC: 'isometric',   // Sets, hold time (seconds)
+    BODYWEIGHT: 'bodyweight', // Sets, reps (no weight)
+};
+
+/**
+ * Default rest time between exercises (in seconds)
+ */
+export const DEFAULT_REST_BETWEEN_EXERCISES = 120; // 2 minutes
+
+
+/**
  * Create exercise structure
+ * @param {Object} data - Exercise data
+ * @param {string} data.name - Exercise name
+ * @param {string} data.exerciseType - Type: strength, cardio, isometric, bodyweight
+ * @param {number} data.sets - Number of sets (for strength/bodyweight/isometric)
+ * @param {number} data.targetReps - Target reps per set (for strength/bodyweight)
+ * @param {number} data.weight - Weight in kg (for strength)
+ * @param {number} data.duration - Duration in minutes (for cardio)
+ * @param {number} data.speed - Speed in km/h (for cardio)
+ * @param {number} data.distance - Distance in km (for cardio)
+ * @param {number} data.elevation - Elevation/incline in % (for cardio)
+ * @param {number} data.holdTime - Hold time in seconds (for isometric)
  */
 export function createExercise(data) {
-    return {
-        id: `exercise_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    const baseExercise = {
+        id: data.id || `exercise_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         name: data.name,
-        sets: data.sets || 4,
-        targetReps: data.targetReps || 10,
+        exerciseType: data.exerciseType || EXERCISE_TYPE.STRENGTH,
         restSeconds: data.restSeconds || 90,
-        weight: data.weight || null,
         notes: data.notes || '',
         formTip: data.formTip || '',
         completedSets: [],
-        status: 'pending', // pending, completed, skipped
+        status: 'pending', // pending, in_progress, completed, skipped
+        order: data.order || 0, // For reordering exercises
     };
+
+    // Add type-specific fields
+    switch (data.exerciseType || EXERCISE_TYPE.STRENGTH) {
+        case EXERCISE_TYPE.CARDIO:
+            return {
+                ...baseExercise,
+                duration: data.duration || 30,       // minutes
+                speed: data.speed || null,           // km/h
+                distance: data.distance || null,     // km
+                elevation: data.elevation || 0,      // % incline
+                targetCalories: data.targetCalories || null,
+            };
+        case EXERCISE_TYPE.ISOMETRIC:
+            return {
+                ...baseExercise,
+                sets: data.sets || 3,
+                holdTime: data.holdTime || 60,       // seconds per set
+            };
+        case EXERCISE_TYPE.BODYWEIGHT:
+            return {
+                ...baseExercise,
+                sets: data.sets || 4,
+                targetReps: data.targetReps || 10,
+            };
+        case EXERCISE_TYPE.STRENGTH:
+        default:
+            return {
+                ...baseExercise,
+                sets: data.sets || 4,
+                targetReps: data.targetReps || 10,
+                weight: data.weight || null,         // kg
+            };
+    }
 }
+
 
 /**
  * Create training session structure
@@ -128,8 +188,8 @@ export async function saveTraining(session) {
 /**
  * Create or get today's training session
  */
-export async function getOrCreateTodayTraining(trainingType, mode, exercises = [], focusMuscle = null) {
-    const today = getDateString();
+export async function getOrCreateTodayTraining(trainingType, mode, exercises = [], focusMuscle = null, date = null) {
+    const today = date || getDateString();
     let session = await getTrainingByDate(today);
 
     if (!session) {
@@ -140,6 +200,16 @@ export async function getOrCreateTodayTraining(trainingType, mode, exercises = [
             exercises,
             focusMuscle,
         });
+        await saveTraining(session);
+    } else if (session.status === TRAINING_STATUS.PENDING && exercises.length > 0) {
+        // If session exists but is still pending and we have new exercises,
+        // update it with the new workout data (e.g. user selected different muscle group)
+        session.trainingType = trainingType;
+        session.mode = mode;
+        session.exercises = exercises;
+        session.focusMuscle = focusMuscle;
+        session.currentExerciseIndex = 0;
+        session.currentSetIndex = 0;
         await saveTraining(session);
     }
 
@@ -164,10 +234,18 @@ export async function getLastCompletedTraining() {
 /**
  * Start training session
  */
+/**
+ * Start training session
+ */
 export async function startTraining(date) {
     const session = await getTrainingByDate(date);
     if (!session) {
         throw new Error('Training session not found');
+    }
+
+    // If already in progress, handle gracefully (idempotent)
+    if (session.status === TRAINING_STATUS.IN_PROGRESS) {
+        return session;
     }
 
     if (session.status !== TRAINING_STATUS.PENDING) {

@@ -274,7 +274,7 @@ export async function initializeDefaultTemplates() {
     };
     await db.put(STORES.TEMPLATES, holidayTemplate);
 
-    console.log('Default templates initialized');
+    // console.log('Default templates initialized');
 }
 
 /**

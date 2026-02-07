@@ -158,12 +158,12 @@ export async function createDayMeals(date) {
 }
 
 /**
- * Get or create today's meals (idempotent - safe for concurrent calls)
+ * Get or create meals for a specific date (idempotent)
  * Checks for existing meals by mealType before creating to prevent duplicates
  */
-export async function getOrCreateTodayMeals() {
-    const today = getDateString();
-    const existingMeals = await getMealsByDate(today);
+export async function getOrCreateDailyMeals(date) {
+    const targetDate = typeof date === 'string' ? date : getDateString(date);
+    const existingMeals = await getMealsByDate(targetDate);
 
     // Group by meal type to find duplicates
     const mealsByType = {};
@@ -192,7 +192,7 @@ export async function getOrCreateTodayMeals() {
 
         if (group.length === 0) {
             // Create missing meal
-            const meal = createMeal({ date: today, mealType: type });
+            const meal = createMeal({ date: targetDate, mealType: type });
             await saveMeal(meal);
             finalMeals.push(meal);
         } else if (group.length === 1) {
@@ -252,6 +252,13 @@ export async function getOrCreateTodayMeals() {
     }
 
     return finalMeals;
+}
+
+/**
+ * Legacy wrapper for backward compatibility
+ */
+export async function getOrCreateTodayMeals() {
+    return getOrCreateDailyMeals(getDateString());
 }
 
 /**
@@ -640,6 +647,51 @@ export const QUICK_ITEMS = {
         icon: '🍚',
     },
 };
+
+// Alias for backwards compatibility and clarity
+export const DEFAULT_QUICK_ITEMS = QUICK_ITEMS;
+
+/**
+ * Get all quick items (default + custom)
+ * @param {Object} settings - App settings containing customQuickItems
+ * @returns {Array} Array of quick items for display
+ */
+export function getQuickItems(settings = {}) {
+    // Convert default items to array format
+    const defaultItems = Object.entries(QUICK_ITEMS).map(([key, item]) => ({
+        ...item,
+        key,
+        isDefault: true,
+    }));
+
+    // Get custom items from settings
+    const customItems = (settings.customQuickItems || []).map(item => ({
+        ...item,
+        isDefault: false,
+    }));
+
+    // Return combined list
+    return [...defaultItems, ...customItems];
+}
+
+/**
+ * Create a custom quick item
+ * @param {Object} data - Item data
+ * @returns {Object} Formatted quick item
+ */
+export function createCustomQuickItem(data) {
+    return {
+        id: `custom_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+        name: data.name,
+        servingSize: data.servingSize || '1 serving',
+        calories: parseInt(data.calories) || 0,
+        protein: parseInt(data.protein) || 0,
+        carbs: parseInt(data.carbs) || 0,
+        fats: parseInt(data.fats) || 0,
+        category: data.category || FOOD_CATEGORY.PROTEIN,
+        icon: data.icon || '🍽️',
+    };
+}
 
 /**
  * Quick log a common item to a meal

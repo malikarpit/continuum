@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useAppStore, VIEWS } from './store/appStore';
 import Navigation from './components/common/Navigation';
 import BottomNav from './components/common/BottomNav';
-import StarryBackground from './components/common/StarryBackground';
+import BackgroundLayer from './components/common/BackgroundLayer';
 import Today from './components/today/Today';
 import Dashboard from './components/dashboard/Dashboard';
 import Tasks from './components/tasks/Tasks';
@@ -13,6 +13,7 @@ import Analytics from './components/analytics/Analytics';
 import Templates from './components/templates/Templates';
 import Settings from './components/settings/Settings';
 import Toast from './components/common/Toast';
+import { swManager } from './services/ServiceWorkerManager';
 import './styles/main.css';
 
 function App() {
@@ -27,6 +28,15 @@ function App() {
 
   useEffect(() => {
     initializeApp();
+
+    // Register Service Worker for background notifications
+    swManager.register().then((registration) => {
+      if (registration) {
+        // console.log('[App] Service Worker registered successfully');
+        // Try to enable periodic background sync
+        swManager.requestPeriodicSync();
+      }
+    });
   }, [initializeApp]);
 
   // Render current view
@@ -132,7 +142,7 @@ function App() {
 
   return (
     <div className="app">
-      <StarryBackground />
+      <BackgroundLayer />
       <Navigation />
       <main className="page">
         {renderView()}

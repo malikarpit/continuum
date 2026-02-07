@@ -18,6 +18,7 @@ import {
 } from '../../db/templateStore';
 import { calculateDayProgressWithBoundary } from '../../db/dayEngine';
 import { TASK_STATUS } from '../../db/taskStore';
+import { MUSCLE_GROUPS } from '../../db/trainingStore';
 
 export default function Today() {
   const {
@@ -27,7 +28,7 @@ export default function Today() {
     training,
     nutrition,
     settings,
-    completeTask,
+    toggleTask,
     skipTask,
     showToast,
     refreshDay,
@@ -35,6 +36,7 @@ export default function Today() {
     toggleHolidayMode,
     updateHolidayPriority,
     setView,
+    getTodayPlannedWorkout,
   } = useAppStore();
 
   const { currentTime, isOnline, syncStatus, lastSyncTime, forceSync } = useRealTime();
@@ -144,10 +146,18 @@ export default function Today() {
     }
   };
 
-  // Quick task complete
-  const handleQuickComplete = async (taskId) => {
-    await completeTask(taskId);
-    showToast('Task completed! ✓', 'success');
+  // Quick task toggle (complete/uncomplete)
+  const handleQuickToggle = async (taskId, isCurrentlyCompleted) => {
+    try {
+      await toggleTask(taskId);
+      if (isCurrentlyCompleted) {
+        showToast('Task marked as pending', 'info');
+      } else {
+        showToast('Task completed! ✓', 'success');
+      }
+    } catch (error) {
+      showToast(error.message || 'Failed to toggle task', 'error');
+    }
   };
 
   // Handle energy selection
@@ -295,6 +305,43 @@ export default function Today() {
         </div>
       </section>
 
+      {/* Today's Workout Widget */}
+      {(() => {
+        const plannedWorkout = getTodayPlannedWorkout();
+        if (!plannedWorkout) return null;
+
+        if (plannedWorkout.type === 'rest') {
+          return (
+            <section className="todays-workout-widget rest">
+              <span className="workout-icon">😌</span>
+              <span className="workout-label">{plannedWorkout.label || 'Rest Day'} — scheduled recovery</span>
+            </section>
+          );
+        }
+
+        const muscleInfo = Object.values(MUSCLE_GROUPS).flat().find(m => m.id === plannedWorkout.focus);
+        return (
+          <section className="todays-workout-widget">
+            <div className="workout-content">
+              <span className="workout-icon">{muscleInfo?.icon || '🏋️'}</span>
+              <div className="workout-info">
+                <strong>{plannedWorkout.label || `${muscleInfo?.name} Day`}</strong>
+                <span className="workout-meta">
+                  {plannedWorkout.environment === 'gym' ? '🏋️ Gym' : '🏠 Home'} • {muscleInfo?.name}
+                  {plannedWorkout.exercises?.length > 0 && ` • ${plannedWorkout.exercises.length} Exercises`}
+                </span>
+              </div>
+            </div>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => setView(VIEWS.TRAINING)}
+            >
+              Go →
+            </button>
+          </section>
+        );
+      })()}
+
       {/* Timeline Visualization */}
       <section className="timeline-section">
         <div className="timeline">
@@ -345,11 +392,19 @@ export default function Today() {
           <div className="current-tasks">
             {currentBlock.defaultTasks?.length > 0 ? (
               currentBlock.defaultTasks.map((templateTask, i) => {
-                // Match by blockId and templateTaskId for stable matching
-                const matchedTask = tasks.find(t =>
-                  (t.blockId === currentBlock.id && t.templateTaskId === templateTask.id) ||
-                  (t.blockId === currentBlock.id && t.title === templateTask.title)
-                );
+                // Match task by blockId AND title (required both to match)
+                // templateTaskId matching is only used if the template task actually has an id
+                const matchedTask = tasks.find(t => {
+                  if (t.blockId !== currentBlock.id) return false;
+
+                  // If template task has an explicit id, try matching by templateTaskId first
+                  if (templateTask.id && t.templateTaskId === templateTask.id) {
+                    return true;
+                  }
+
+                  // Otherwise match by exact title
+                  return t.title === templateTask.title;
+                });
                 const isCompleted = matchedTask?.status === TASK_STATUS.COMPLETED;
 
                 return (
@@ -359,7 +414,7 @@ export default function Today() {
                   >
                     <div
                       className="task-checkbox"
-                      onClick={() => matchedTask && handleQuickComplete(matchedTask.id)}
+                      onClick={() => matchedTask && handleQuickToggle(matchedTask.id, isCompleted)}
                     >
                       {isCompleted ? '✓' : '○'}
                     </div>
@@ -404,39 +459,6 @@ export default function Today() {
           </div>
         </section>
       )}
-
-      {/* Task Filter & Quick Stats */}
-      <section className="task-filter-section">
-        <div className="filter-buttons">
-          <button
-            className={`filter-btn ${taskFilter === 'all' ? 'active' : ''}`}
-            onClick={() => setTaskFilter('all')}
-          >
-            All Tasks
-          </button>
-          <button
-            className={`filter-btn ${taskFilter === 'template' ? 'active' : ''}`}
-            onClick={() => setTaskFilter('template')}
-          >
-            📅 Template
-          </button>
-          <button
-            className={`filter-btn ${taskFilter === 'manual' ? 'active' : ''}`}
-            onClick={() => setTaskFilter('manual')}
-          >
-            ✏️ Manual
-          </button>
-        </div>
-        <div className="filter-count text-muted">
-          {(() => {
-            const templateTasks = tasks.filter(t => t.templateTaskId || t.source === 'template');
-            const manualTasks = tasks.filter(t => !t.templateTaskId && t.source !== 'template');
-            if (taskFilter === 'template') return `${templateTasks.length} template tasks`;
-            if (taskFilter === 'manual') return `${manualTasks.length} manual tasks`;
-            return `${tasks.length} total tasks`;
-          })()}
-        </div>
-      </section>
 
       {/* Quick Stats */}
       <section className="quick-stats">
@@ -649,9 +671,10 @@ const todayStyles = `
   }
 
   .time-value {
-    font-size: var(--font-size-4xl);
+    font-size: clamp(2rem, 8vw, var(--font-size-4xl));
     font-weight: var(--font-weight-bold);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
   .sync-status {
@@ -1280,5 +1303,54 @@ const todayStyles = `
 
   .block-task-item.completed .task-status-icon {
     color: var(--color-success);
+  }
+
+  /* Today's Workout Widget */
+  .todays-workout-widget {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-4);
+    padding: var(--spacing-4);
+    background: linear-gradient(135deg, var(--color-accent-dark) 0%, var(--color-accent) 100%);
+    border-radius: var(--radius-lg);
+    margin-bottom: var(--spacing-4);
+  }
+
+  .todays-workout-widget.rest {
+    background: var(--color-bg-card);
+    border: 1px dashed var(--color-border);
+    justify-content: center;
+    gap: var(--spacing-2);
+  }
+
+  .todays-workout-widget .workout-content {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-3);
+  }
+
+  .todays-workout-widget .workout-icon {
+    font-size: 2rem;
+  }
+
+  .todays-workout-widget .workout-info {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-1);
+  }
+
+  .todays-workout-widget .workout-info strong {
+    font-size: var(--font-size-lg);
+    color: white;
+  }
+
+  .todays-workout-widget .workout-meta {
+    font-size: var(--font-size-sm);
+    color: rgba(255, 255, 255, 0.8);
+  }
+
+  .todays-workout-widget .workout-label {
+    color: var(--color-text-secondary);
   }
 `;
