@@ -2341,14 +2341,14 @@ function ExerciseEditorModal({ region, environment, onClose }) {
   // Get exercises for selected muscle
   const availableExercises = useMemo(() => {
     if (!selectedMuscle) return [];
-    return getExercisesForMuscle(selectedRegion, selectedMuscle, selectedEnvironment);
-  }, [selectedRegion, selectedMuscle, selectedEnvironment]);
+    return getExercisesForMuscle(region, selectedMuscle, environment);
+  }, [region, selectedMuscle, environment]);
 
   // Handle selecting an exercise to configure
   const handleSelectExercise = (exercise) => {
     setConfiguringExercise({
       ...exercise,
-      exerciseType: exercise.exerciseType || exerciseType,
+      exerciseType: exercise.exerciseType || 'strength',
       // Ensure default values exist
       sets: exercise.sets || 4,
       targetReps: exercise.targetReps || 10,
