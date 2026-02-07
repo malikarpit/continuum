@@ -4,7 +4,7 @@
  * Supports full edit mode for customizing all content
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAppStore } from '../../store/appStore';
 import {
   TRAINING_STATUS,
